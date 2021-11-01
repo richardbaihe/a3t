@@ -42,7 +42,7 @@ egs*/*/*/tensorboard
 egs*/*/*/wav*
 egs*/*/*/nltk*
 egs*/*/*/.cache*
-
+egs*/*/*/.ipynb_checkpoints
 # tools related
 tools/bin
 tools/include
@@ -75,6 +75,7 @@ tools/festival*
 tools/speech_tools*
 tools/phonemizer*
 tools/py3mmseg
+tools/anaconda
 tools/._*
 raw_data/
 output/

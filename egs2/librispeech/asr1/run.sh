@@ -18,6 +18,9 @@ inference_config=conf/decode_asr.yaml
     --ngpu 16 \
     --nbpe 5000 \
     --max_wav_duration 30 \
+    --stage 12 \
+    --stop_stage 13 \
+    --use_lm true \
     --speed_perturb_factors "0.9 1.0 1.1" \
     --asr_config "${asr_config}" \
     --lm_config "${lm_config}" \
@@ -25,5 +28,6 @@ inference_config=conf/decode_asr.yaml
     --train_set "${train_set}" \
     --valid_set "${valid_set}" \
     --test_sets "${test_sets}" \
+    --gpu_inference true \
     --lm_train_text "data/${train_set}/text data/local/other_text/text" \
     --bpe_train_text "data/${train_set}/text" "$@"
