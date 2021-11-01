@@ -25,7 +25,7 @@ from espnet.nets.pytorch_backend.transformer.repeat import repeat
 from espnet.nets.pytorch_backend.transformer.subsampling import Conv2dSubsampling
 from espnet.nets.pytorch_backend.transformer.subsampling import Conv2dSubsampling6
 from espnet.nets.pytorch_backend.transformer.subsampling import Conv2dSubsampling8
-
+from espnet.nets.pytorch_backend.transformer.mask import subsequent_mask
 
 def _pre_hook(
     state_dict,
@@ -102,6 +102,7 @@ class Encoder(torch.nn.Module):
         positionwise_conv_kernel_size=1,
         selfattention_layer_type="selfattn",
         padding_idx=-1,
+        mlm=False,
         stochastic_depth_rate=0.0,
         intermediate_layers=None,
     ):
@@ -119,7 +120,7 @@ class Encoder(torch.nn.Module):
                 pos_enc_class(attention_dim, positional_dropout_rate),
             )
         elif input_layer == "conv2d":
-            self.embed = Conv2dSubsampling(idim, attention_dim, dropout_rate)
+            self.embed = Conv2dSubsampling(idim, attention_dim, dropout_rate, mlm)
             self.conv_subsampling_factor = 4
         elif input_layer == "conv2d-scaled-pos-enc":
             self.embed = Conv2dSubsampling(
@@ -289,7 +290,7 @@ class Encoder(torch.nn.Module):
             raise NotImplementedError("Support only linear or conv1d.")
         return positionwise_layer, positionwise_layer_args
 
-    def forward(self, xs, masks):
+    def forward(self, xs, masks, masked_position=None, mlm_layer=-1, bidirectional=True):
         """Encode input sequence.
 
         Args:
@@ -301,6 +302,9 @@ class Encoder(torch.nn.Module):
             torch.Tensor: Mask tensor (#batch, time).
 
         """
+        emb, mlm_position = None, None
+        if not self.training:
+            masked_position = None
         if isinstance(
             self.embed,
             (Conv2dSubsampling, Conv2dSubsampling6, Conv2dSubsampling8, VGG2L),

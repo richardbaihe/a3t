@@ -40,6 +40,9 @@ from espnet2.train.distributed_utils import DistributedOption
 from espnet2.train.reporter import Reporter
 from espnet2.train.reporter import SubReporter
 from espnet2.utils.build_dataclass import build_dataclass
+from espnet2.utils import slurm
+import os
+import subprocess
 
 if torch.distributed.is_available():
     from torch.distributed import ReduceOp
@@ -171,6 +174,18 @@ class Trainer:
         # NOTE(kamo): Don't check the type more strictly as far trainer_options
         assert is_dataclass(trainer_options), type(trainer_options)
         assert len(optimizers) == len(schedulers), (len(optimizers), len(schedulers))
+        # MAXIMUM_SAVE_TIME = -1
+        MAXIMUM_SAVE_TIME = -1
+        use_cluster = False
+        try :
+            os.environ["SLURM_JOB_ID"]
+            use_cluster = True
+        except:
+            use_cluster = False
+
+        if use_cluster:
+            resume_command, death_time = slurm.restart_command()
+            # print('| restart command:', " ".join(resume_command))    
 
         if isinstance(trainer_options.keep_nbest_models, int):
             keep_nbest_models = trainer_options.keep_nbest_models
@@ -258,6 +273,8 @@ class Trainer:
         start_time = time.perf_counter()
         for iepoch in range(start_epoch, trainer_options.max_epoch + 1):
             if iepoch != start_epoch:
+                MAXIMUM_SAVE_TIME = max((time.perf_counter() - start_time)
+                            / (iepoch - start_epoch), MAXIMUM_SAVE_TIME)
                 logging.info(
                     "{}/{}epoch started. Estimated time to finish: {}".format(
                         iepoch,
@@ -426,7 +443,18 @@ class Trainer:
                     trainer_options.patience, *trainer_options.early_stopping_criterion
                 ):
                     break
+            # 9. check remaining time enough for an epoch or not
+            if use_cluster:
+                done = (death_time is not None and
+                        death_time - time.time() < MAXIMUM_SAVE_TIME)      
+            else:
+                done = False
 
+            if done:
+                if distributed_option.dist_rank == 0:
+                    print('| Running restart command:', " ".join(resume_command))    
+                    subprocess.check_call(resume_command)
+                break
         else:
             logging.info(
                 f"The training was finished at {trainer_options.max_epoch} epochs "

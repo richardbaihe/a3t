@@ -76,3 +76,8 @@ tools/speech_tools*
 tools/phonemizer*
 tools/py3mmseg
 tools/._*
+raw_data/
+output/
+*.npy
+TextGrid/
+hifigan/*.pth.tar

@@ -19,6 +19,7 @@ def get_parser():
         description="Launch distributed process with appropriate options. ",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument(
         "--cmd",
         help="The path of cmd script of Kaldi: run.pl. queue.pl, or slurm.pl",
@@ -97,7 +98,8 @@ def main(cmd=None):
     parser = get_parser()
     args = parser.parse_args(cmd)
     args.cmd = shlex.split(args.cmd)
-
+    if args.debug:
+        args.args = args.args[0].split()
     if args.host is None and shutil.which(args.cmd[0]) is None:
         raise RuntimeError(
             f"The first args of --cmd should be a script path. e.g. utils/run.pl: "

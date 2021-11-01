@@ -8,9 +8,12 @@ from typing import Tuple
 from typing import Union
 
 import torch
+import math
+import numpy as np
 from typeguard import check_argument_types
 
 from espnet.nets.e2e_asr_common import ErrorCalculator
+from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask, pad_list
 from espnet.nets.pytorch_backend.nets_utils import th_accuracy
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import (
@@ -26,7 +29,7 @@ from espnet2.asr.specaug.abs_specaug import AbsSpecAug
 from espnet2.layers.abs_normalize import AbsNormalize
 from espnet2.torch_utils.device_funcs import force_gatherable
 from espnet2.train.abs_espnet_model import AbsESPnetModel
-
+from espnet2.tts.feats_extract.abs_feats_extract import AbsFeatsExtract
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
     from torch.cuda.amp import autocast
 else:
@@ -324,3 +327,274 @@ class ESPnetASRModel(AbsESPnetModel):
         ys_pad_lens: torch.Tensor,
     ):
         raise NotImplementedError
+
+
+class ESPnetMLMModel(AbsESPnetModel):
+    """CTC-attention hybrid Encoder-Decoder model"""
+
+    def __init__(
+        self,
+        token_list: Union[Tuple[str, ...], List[str]],
+        odim: int,
+        feats_extract: Optional[AbsFeatsExtract],
+        normalize: Optional[AbsNormalize],
+        encoder: AbsEncoder,
+        decoder: Optional[AbsDecoder],
+        ctc: CTC,
+        ctc_weight: float = 0.5,
+        ignore_id: int = -1,
+        lsm_weight: float = 0.0,
+        length_normalized_loss: bool = False,
+        report_cer: bool = True,
+        report_wer: bool = True,
+        sym_space: str = "<space>",
+        sym_blank: str = "<blank>",
+    ):
+        assert check_argument_types()
+        assert 0.0 <= ctc_weight <= 1.0, ctc_weight
+
+        super().__init__()
+        # note that eos is the same as sos (equivalent ID)
+        self.odim = odim
+        self.ignore_id = ignore_id
+        self.ctc_weight = ctc_weight
+        self.token_list = token_list.copy()
+
+        self.normalize = normalize
+        self.encoder = encoder
+        # we set self.decoder = None in the CTC mode since
+        # self.decoder parameters were never used and PyTorch complained
+        # and threw an Exception in the multi-GPU experiment.
+        # thanks Jeff Farris for pointing out the issue.
+        if ctc_weight == 1.0:
+            self.decoder = None
+        else:
+            self.decoder = decoder
+        if ctc_weight == 0.0:
+            self.ctc = None
+        else:
+            self.ctc = ctc
+        self.criterion_mlm = LabelSmoothingLoss(
+            size=odim,
+            padding_idx=ignore_id,
+            smoothing=lsm_weight,
+            normalize_length=length_normalized_loss,
+        )
+
+        if report_cer or report_wer:
+            self.error_calculator = ErrorCalculator(
+                token_list, sym_space, sym_blank, report_cer, report_wer
+            )
+        else:
+            self.error_calculator = None
+
+        self.feats_extract = feats_extract
+        self.mlm_weight = 1.0
+        self.mlm_prob = 0.25
+        self.mlm_layer = 12
+        self.finetune_wo_mlm =True
+        self.max_span = 50
+        self.min_span = 4
+        self.span = True
+        if self.mlm_weight > 0 and self.mlm_prob > 0:
+            self.sfc = torch.nn.Linear(self.encoder._output_size, odim)
+            self.loss_func = torch.nn.L1Loss(reduce=False)
+            # self.loss_func = torch.nn.MSELoss(reduce=False)
+
+    def forward(
+        self,
+        speech: torch.Tensor,
+        speech_lengths: torch.Tensor,
+        # text: torch.Tensor,
+        # text_lengths: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
+        """Frontend + Encoder + Decoder + Calc loss
+
+        Args:
+            speech: (Batch, Length, ...)
+            speech_lengths: (Batch, )
+            text: (Batch, Length)
+            text_lengths: (Batch,)
+        """
+        # assert text_lengths.dim() == 1, text_lengths.shape
+        # Check that batch_size is unified
+        assert (
+            speech.shape[0]
+            == speech_lengths.shape[0]
+            # == text.shape[0]
+            # == text_lengths.shape[0]
+        ), (speech.shape, speech_lengths.shape) #, text.shape, text_lengths.shape)
+        batch_size = speech.shape[0]
+
+        # # for data-parallel
+        # text = text[:, : text_lengths.max()]
+
+        # 1. Encoder
+        encoder_out, encoder_out_lens, xs_pad, masked_position = self.encode(speech, speech_lengths)
+
+        # 2a. Attention-decoder branch
+        if self.ctc_weight == 1.0:
+            loss_mlm = None
+            loss_copy = None
+        else:
+            loss_mlm, loss_copy = self._calc_mlm_loss(
+                encoder_out, encoder_out_lens, xs_pad, masked_position
+            )
+
+        # 2b. CTC branch
+        if self.ctc_weight == 0.0:
+            loss_ctc, cer_ctc = None, None
+        else:
+            loss_ctc, cer_ctc = self._calc_ctc_loss(
+                encoder_out, encoder_out_lens, text, text_lengths
+            )
+
+        if self.ctc_weight == 0.0:
+            loss = loss_mlm + loss_copy
+        elif self.ctc_weight == 1.0:
+            loss = loss_ctc
+        else:
+            loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_mlm
+
+        stats = dict(
+            loss=loss.detach(),
+            loss_mlm=loss_mlm.detach() if loss_mlm is not None else None,
+            loss_copy=loss_copy.detach() if loss_copy is not None else None,
+        )
+
+        # force_gatherable: to-device and to-tensor if scalar for DataParallel
+        loss, stats, weight = force_gatherable((loss, stats, batch_size), loss.device)
+        return loss, stats, weight
+
+
+    def collect_feats(
+        self,
+        speech: torch.Tensor,
+        speech_lengths: torch.Tensor,
+        # text: torch.Tensor,
+        # text_lengths: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        if self.feats_extract:
+            feats, feats_lengths = self.feats_extract(speech, speech_lengths)
+        else:
+            # Generate dummy stats if extract_feats_in_collect_stats is False
+            logging.warning(
+                "Generating dummy stats for feats and feats_lengths, "
+                "because encoder_conf.extract_feats_in_collect_stats is "
+                f"{self.extract_feats_in_collect_stats}"
+            )
+            feats, feats_lengths = speech, speech_lengths
+        return {"feats": feats, "feats_lengths": feats_lengths}
+
+
+    def encode(
+        self, speech: torch.Tensor, speech_lengths: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Frontend + Encoder. Note that this method is used by asr_inference.py
+
+        Args:
+            speech: (Batch, Length, ...)
+            speech_lengths: (Batch, )
+        """
+        with autocast(False):
+            # 1. Extract feats
+            if self.feats_extract is not None:
+                feats, feats_lengths = self.feats_extract(speech, speech_lengths)
+            else:
+                # Use precalculated feats (feats_type != raw case)
+                feats, feats_lengths = speech, speech_lengths
+
+            # 3. Normalization for feature: e.g. Global-CMVN, Utterance-CMVN
+            if self.normalize is not None:
+                feats, feats_lengths = self.normalize(feats, feats_lengths)
+
+        max_ilen = max(feats_lengths).item()
+        round = max_ilen % self.encoder.attention_window
+        if round != 0:
+            max_ilen += (self.encoder.attention_window - round)
+            n_batch = feats.shape[0]
+            xs_pad = feats.new_zeros(n_batch, max_ilen, *feats[0].size()[1:])
+            for i in range(n_batch):
+                xs_pad[i, : feats[i].size(0)] = feats[i]
+        else:
+            xs_pad = feats[:, : max_ilen]
+        src_mask = make_non_pad_mask(feats_lengths.tolist(), xs_pad[:,:,0], length_dim=1).to(xs_pad.device).unsqueeze(-2)
+        # 5*1171*80
+        xs_pad_placeholder = xs_pad.detach().clone()
+        # 5*1*1171
+        src_mask_placeholder = src_mask
+        if self.span:
+            masked_position = self.span_masking(xs_pad, 
+                                                src_mask_placeholder, 
+                                                self.mlm_prob, 
+                                                max_span=self.max_span, min_span=self.min_span)
+        else:
+            masked_position = self.random_masking(xs_pad, 
+                                                src_mask_placeholder, 
+                                                self.mlm_prob)
+        # Make batch for mlm inputs
+        batch = dict(
+            xs_pad=xs_pad,
+            ilens=feats_lengths,
+            masked_position=masked_position,
+            attention_mask=src_mask_placeholder,
+        )
+        # 4. Forward encoder
+        # feats: (Batch, Length, Dim)
+        # -> encoder_out: (Batch, Length2, Dim2)
+        encoder_out, encoder_out_lens, _ = self.encoder(**batch)
+        
+        return encoder_out, encoder_out_lens, xs_pad_placeholder, masked_position
+        
+    def _calc_mlm_loss(
+        self,
+        encoder_out: torch.Tensor,
+        encoder_out_lens: torch.Tensor,
+        xs_pad: torch.Tensor,
+        masked_position: torch.Tensor
+    ):
+        true_label_position = (torch.rand(masked_position.size()) < (self.mlm_prob * .15)).to(xs_pad.device)
+        # mlm_loss_position = (true_label_position + masked_position) > 0
+        mlm_loss_position = masked_position>0
+        copy_loss_position = true_label_position>0
+        mse_loss = self.loss_func(self.sfc(encoder_out.view(-1, self.encoder._output_size)), 
+                                            xs_pad.view(-1, self.odim)).sum(dim=-1)
+        loss_mlm = (mse_loss * mlm_loss_position.view(-1).float()).sum() \
+                                            / (mlm_loss_position.float().sum() + 1e-10)
+        loss_copy =(mse_loss * copy_loss_position.view(-1).float()).sum() \
+                                            / (copy_loss_position.float().sum() + 1e-10)
+
+        # loss_mlm = ( * mlm_loss_position.view(-1).float()).sum() \
+        #                                     / (mlm_loss_position.float().sum() + 1e-10)
+        return loss_mlm, loss_copy
+
+    def random_masking(self, xs_pad, src_mask, mask_prob):
+        masked_position = np.random.rand(*xs_pad.size()[:2]) < mask_prob
+        # no sos and eos
+        masked_position[:,0] = 0
+        non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
+        non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
+        masked_position = masked_position * non_eos_mask
+        return torch.BoolTensor(masked_position).to(xs_pad.device)
+    
+    def span_masking(self, xs_pad, src_mask, mask_prob, max_span=10, min_span=1):
+        assert max_span >= min_span
+        # xs_pad = xs_pad[:, :-2:2, :][:, :-2:2, :]
+        p = 0.2
+        len_distrib = [p * (1-p) ** (i - min_span) for i in range(min_span, max_span + 1)]
+        len_distrib = [x / (sum(len_distrib)) for x in len_distrib]
+        bz, sent_len, _ = xs_pad.size()
+        mask_num_lower = math.ceil(sent_len * mask_prob)
+        masked_position = np.zeros((bz, sent_len))
+        for idx in range(bz):
+            while np.sum(masked_position[idx]) < mask_num_lower:
+                span_start = np.random.choice(sent_len)
+                span_len = np.random.choice(np.arange(min_span, max_span+1), p=len_distrib)
+                while masked_position[idx, span_start] > 0 or span_start+span_len-1 >= sent_len or masked_position[idx, span_start+span_len-1] > 0:
+                    span_start = np.random.choice(sent_len)
+                    span_len = np.random.choice(np.arange(min_span, max_span+1), p=len_distrib)
+                masked_position[idx, span_start:span_start+span_len] = 1
+        non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
+        # non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
+        masked_position = masked_position * non_eos_mask
+        return torch.BoolTensor(masked_position).to(xs_pad.device)

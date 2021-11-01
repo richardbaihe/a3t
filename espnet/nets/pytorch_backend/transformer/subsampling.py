@@ -52,7 +52,7 @@ class Conv2dSubsampling(torch.nn.Module):
 
     """
 
-    def __init__(self, idim, odim, dropout_rate, pos_enc=None):
+    def __init__(self, idim, odim, dropout_rate, pos_enc=None,mlm=False):
         """Construct an Conv2dSubsampling object."""
         super(Conv2dSubsampling, self).__init__()
         self.conv = torch.nn.Sequential(
@@ -65,8 +65,10 @@ class Conv2dSubsampling(torch.nn.Module):
             torch.nn.Linear(odim * (((idim - 1) // 2 - 1) // 2), odim),
             pos_enc if pos_enc is not None else PositionalEncoding(odim, dropout_rate),
         )
+        if mlm:
+            self.mask_feature = torch.nn.Parameter(torch.empty((odim)).normal_())
 
-    def forward(self, x, x_mask):
+    def forward(self, x, x_mask, masked_position=None):
         """Subsample x.
 
         Args:
@@ -83,10 +85,19 @@ class Conv2dSubsampling(torch.nn.Module):
         x = x.unsqueeze(1)  # (b, c, t, f)
         x = self.conv(x)
         b, c, t, f = x.size()
-        x = self.out(x.transpose(1, 2).contiguous().view(b, t, c * f))
-        if x_mask is None:
-            return x, None
-        return x, x_mask[:, :, :-2:2][:, :, :-2:2]
+        if masked_position is not None:
+            emb = self.out[0](x.transpose(1, 2).contiguous().view(b, t, c * f))
+            masked_position = masked_position.unsqueeze(-1).expand_as(emb)
+            masked_emb = emb.masked_fill(masked_position, 0) + self.mask_feature.unsqueeze(0).unsqueeze(0).expand_as(emb).masked_fill(~masked_position, 0)
+            x = self.out[1](masked_emb)
+            if x_mask is None:
+                return (x, emb, masked_position), None
+            return (x, emb, masked_position), x_mask[:, :, :-2:2][:, :, :-2:2]
+        else:
+            x = self.out(x.transpose(1, 2).contiguous().view(b, t, c * f))
+            if x_mask is None:
+                return x, None
+            return x, x_mask[:, :, :-2:2][:, :, :-2:2]
 
     def __getitem__(self, key):
         """Get item.
