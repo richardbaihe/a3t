@@ -81,7 +81,7 @@ sos_eos="<sos/eos>" # sos and eos symbole
 bpe_input_sentence_size=5000000 # Size of input sentence for BPE.
 bpe_nlsyms=         # non-linguistic symbols list, separated by a comma, for BPE
 bpe_char_cover=1.0  # character coverage when modeling BPE
-
+phn_as_word=false
 # MLM model related
 mlm_tag=       # Suffix to the result dir for asr model training.
 mlm_exp=       # Specify the directory path for ASR experiment.
@@ -117,7 +117,7 @@ bpe_train_text=  # Text file path of bpe training set.
 
 nlsyms_txt=none  # Non-linguistic symbol list if existing.
 cleaner=none     # Text cleaner.
-g2p=none         # g2p method (needed if token_type=phn).
+g2p=g2p_en          # g2p method (needed if token_type=phn).
 lang=noinfo      # The language type of corpus.
 score_opts=                # The options given to sclite scoring
 local_score_opts=          # The options given to local/score.sh.
@@ -163,6 +163,9 @@ if [ "${lang}" != noinfo ]; then
 else
     token_listdir=data/token_list
 fi
+if [ "${token_type}" = phn ]; then
+    token_listdir+="_${g2p}"
+fi
 bpedir="${token_listdir}/bpe_${bpemode}${nbpe}"
 bpeprefix="${bpedir}"/bpe
 bpemodel="${bpeprefix}".model
@@ -171,8 +174,11 @@ chartoken_list="${token_listdir}"/char/tokens.txt
 # NOTE: keep for future development.
 # shellcheck disable=SC2034
 wordtoken_list="${token_listdir}"/word/tokens.txt
+phntoken_listdir="${token_listdir}"/phn/tokens.txt
 
-if [ "${token_type}" = bpe ]; then
+if [ "${token_type}" = phn ]; then
+    token_list="${phntoken_listdir}"
+elif [ "${token_type}" = bpe ]; then
     token_list="${bpetoken_list}"
 elif [ "${token_type}" = char ]; then
     token_list="${chartoken_list}"
@@ -200,6 +206,9 @@ if [ -z "${mlm_tag}" ]; then
     if [ "${token_type}" = bpe ]; then
         mlm_tag+="${nbpe}"
     fi
+    if [ "${token_type}" = phn ]; then
+        mlm_tag+="_${g2p}"
+    fi
     # Add overwritten arg's info
     if [ -n "${mlm_args}" ]; then
         mlm_tag+="$(echo "${mlm_args}" | sed -e "s/--/\_/g" -e "s/[ |=/]//g")"
@@ -218,6 +227,9 @@ if [ -z "${mlm_stats_dir}" ]; then
     fi
     if [ "${token_type}" = bpe ]; then
         mlm_stats_dir+="${nbpe}"
+    fi
+    if [ "${token_type}" = phn ]; then
+        mlm_stats_dir+="_${g2p}"
     fi
     if [ -n "${speed_perturb_factors}" ]; then
         mlm_stats_dir+="_sp"
@@ -244,6 +256,11 @@ fi
 # fi
 
 # ========================== Main stages start from here. ==========================
+
+act_token_type="${token_type}"
+if "${phn_as_word}"; then
+    act_token_type="word"
+fi
 
 if ! "${skip_data_prep}"; then
     if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
@@ -443,60 +460,27 @@ if ! "${skip_data_prep}"; then
         # The first symbol in token_list must be "<blank>" and the last must be also sos/eos:
         # 0 is reserved for CTC-blank for ASR and also used as ignore-index in the other task
         mkdir -p ${token_listdir}
-        if [ "${token_type}" = bpe ]; then
+        _opts="--non_linguistic_symbols ${nlsyms_txt}"
 
-            if [ -n "${bpe_nlsyms}" ]; then
-                _opts_spm="--user_defined_symbols=${bpe_nlsyms}"
-            else
-                _opts_spm=""
-            fi
-
-            spm_train \
-                --input="${data_feats}/srctexts" \
-                --vocab_size="${nbpe}" \
-                --model_type="${bpemode}" \
-                --model_prefix="${bpeprefix}" \
-                --character_coverage=${bpe_char_cover} \
-                --input_sentence_size="${bpe_input_sentence_size}" \
-                --shuffle_input_sentence=true \
-                ${_opts_spm}
-
-            {
-            echo "${blank}"
-            echo "${oov}"
-            # Remove <unk>, <s>, </s> from the vocabulary
-            <"${bpeprefix}".vocab awk '{ if( NR != 1 && NR != 2 && NR != 3 ){ print $1; } }'
-            echo "${sos_eos}"
-            } > "${token_list}"
-
-        elif [ "${token_type}" = char ] || [ "${token_type}" = phn ]; then
-            _opts="--non_linguistic_symbols ${nlsyms_txt}"
-
-            # The first symbol in token_list must be "<blank>" and the last must be also sos/eos:
-            # 0 is reserved for CTC-blank for ASR and also used as ignore-index in the other task
-            ${python} -m espnet2.bin.tokenize_text \
-                --token_type "${token_type}" -f 2- \
-                --input "${data_feats}/srctexts" \
-                --output "${token_list}" \
-                --non_linguistic_symbols "${nlsyms_txt}" \
-                --cleaner "${cleaner}" \
-                --g2p "${g2p}" \
-                --write_vocabulary true \
-                --add_symbol "${blank}:0" \
-                --add_symbol "${oov}:1" \
-                --add_symbol "${sos_eos}:-1"
-
-        else
-            log "Error: not supported --token_type '${token_type}'"
-            exit 2
-        fi
+        # The first symbol in token_list must be "<blank>" and the last must be also sos/eos:
+        # 0 is reserved for CTC-blank for ASR and also used as ignore-index in the other task
+        ${python} -m espnet2.bin.tokenize_text \
+            --token_type "${act_token_type}" -f 2- \
+            --input "${data_feats}/srctexts" \
+            --output "${token_list}" \
+            --non_linguistic_symbols "${nlsyms_txt}" \
+            --cleaner "${cleaner}" \
+            --g2p "${g2p}" \
+            --write_vocabulary true \
+            --add_symbol "${blank}:0" \
+            --add_symbol "${oov}:1" \
+            --add_symbol "${sos_eos}:-1"
     fi
 else
     log "Skip the stages for data preparation"
 fi
 
 # ========================== Data preparation is done here. ==========================
-
 
 if ! "${skip_train}"; then
 
@@ -514,7 +498,7 @@ if ! "${skip_train}"; then
 
         _feats_type="$(<${_mlm_train_dir}/feats_type)"
         if [ "${_feats_type}" = raw ]; then
-            _scp=wav.scp
+            _scp=mfa_wav.scp
             if [[ "${audio_format}" == *ark* ]]; then
                 _type=kaldi_ark
             else
@@ -576,13 +560,20 @@ if ! "${skip_train}"; then
                 --collect_stats true \
                 --use_preprocessor true \
                 --bpemodel "${bpemodel}" \
-                --token_type "${token_type}" \
+                --token_type "${act_token_type}" \
                 --token_list "${token_list}" \
                 --non_linguistic_symbols "${nlsyms_txt}" \
                 --cleaner "${cleaner}" \
                 --g2p "${g2p}" \
+                --normalize none \
                 --train_data_path_and_name_and_type "${_mlm_train_dir}/${_scp},speech,${_type}" \
+                --train_data_path_and_name_and_type "${_mlm_train_dir}/mfa_text,text,text" \
+                --train_data_path_and_name_and_type "${_mlm_train_dir}/mfa_start,align_start,text_float" \
+                --train_data_path_and_name_and_type "${_mlm_train_dir}/mfa_end,align_end,text_float" \
                 --valid_data_path_and_name_and_type "${_mlm_valid_dir}/${_scp},speech,${_type}" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_text,text,text" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_start,align_start,text_float" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_end,align_end,text_float" \
                 --train_shape_file "${_logdir}/train.JOB.scp" \
                 --valid_shape_file "${_logdir}/valid.JOB.scp" \
                 --output_dir "${_logdir}/stats.JOB" \
@@ -621,7 +612,7 @@ if ! "${skip_train}"; then
 
         _feats_type="$(<${_mlm_train_dir}/feats_type)"
         if [ "${_feats_type}" = raw ]; then
-            _scp=wav.scp
+            _scp=mfa_wav.scp
             # "sound" supports "wav", "flac", etc.
             if [[ "${audio_format}" == *ark* ]]; then
                 _type=kaldi_ark
@@ -662,7 +653,7 @@ if ! "${skip_train}"; then
                 ${python} -m espnet2.bin.split_scps \
                   --scps \
                       "${_mlm_train_dir}/${_scp}" \
-                      "${_mlm_train_dir}/text" \
+                      "${_mlm_train_dir}/mfa_text" \
                       "${mlm_stats_dir}/train/speech_shape" \
                       "${mlm_stats_dir}/train/text_shape.${token_type}" \
                   --num_splits "${num_splits_mlm}" \
@@ -673,13 +664,19 @@ if ! "${skip_train}"; then
             fi
 
             _opts+="--train_data_path_and_name_and_type ${_split_dir}/${_scp},speech,${_type} "
-            _opts+="--train_data_path_and_name_and_type ${_split_dir}/text,text,text "
+            _opts+="--train_data_path_and_name_and_type ${_split_dir}/mfa_text,text,text "
+            _opts+="--train_data_path_and_name_and_type ${_split_dir}/mfa_start,align_start,text_float "
+            _opts+="--train_data_path_and_name_and_type ${_split_dir}/mfa_end,align_end,text_float "
             _opts+="--train_shape_file ${_split_dir}/speech_shape "
             _opts+="--train_shape_file ${_split_dir}/text_shape.${token_type} "
             _opts+="--multiple_iterator true "
 
         else
             _opts+="--train_data_path_and_name_and_type ${_mlm_train_dir}/${_scp},speech,${_type} "
+            _opts+="--train_data_path_and_name_and_type ${_mlm_train_dir}/mfa_text,text,text "
+            _opts+="--train_data_path_and_name_and_type ${_mlm_train_dir}/mfa_start,align_start,text_float "
+            _opts+="--train_data_path_and_name_and_type ${_mlm_train_dir}/mfa_end,align_end,text_float "
+
             # _opts+="--train_data_path_and_name_and_type ${_mlm_train_dir}/text,text,text "
             _opts+="--train_shape_file ${mlm_stats_dir}/train/speech_shape "
             # _opts+="--train_shape_file ${mlm_stats_dir}/train/text_shape.${token_type} "
@@ -708,12 +705,15 @@ if ! "${skip_train}"; then
             ${python} -m espnet2.bin.mlm_train \
                 --use_preprocessor true \
                 --bpemodel "${bpemodel}" \
-                --token_type "${token_type}" \
+                --token_type "${act_token_type}" \
                 --token_list "${token_list}" \
                 --non_linguistic_symbols "${nlsyms_txt}" \
                 --cleaner "${cleaner}" \
                 --g2p "${g2p}" \
                 --valid_data_path_and_name_and_type "${_mlm_valid_dir}/${_scp},speech,${_type}" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_text,text,text" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_start,align_start,text_float" \
+                --valid_data_path_and_name_and_type "${_mlm_valid_dir}/mfa_end,align_end,text_float" \
                 --valid_shape_file "${mlm_stats_dir}/valid/speech_shape" \
                 --resume true \
                 --fold_length "${_fold_length}" \

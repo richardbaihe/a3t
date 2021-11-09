@@ -82,6 +82,7 @@ class MLMTransformerEncoder(AbsEncoder):
 
     def __init__(
         self,
+        vocab_size: int,
         input_size: int,
         output_size: int = 256,
         attention_heads: int = 4,
@@ -96,7 +97,7 @@ class MLMTransformerEncoder(AbsEncoder):
         concat_after: bool = False,
         positionwise_layer_type: str = "linear",
         positionwise_conv_kernel_size: int = 1,
-        padding_idx: int = -1,
+        padding_idx: int = 0,
     ):
         assert check_argument_types()
         super().__init__()
@@ -131,6 +132,10 @@ class MLMTransformerEncoder(AbsEncoder):
                 torch.nn.Dropout(dropout_rate),
                 torch.nn.ReLU(),
                 pos_enc_class(output_size, positional_dropout_rate)
+            )
+            self.text_embed = torch.nn.Sequential(
+                torch.nn.Embedding(vocab_size, output_size, padding_idx=padding_idx),
+                pos_enc_class(output_size, positional_dropout_rate),
             )
         else:
             raise ValueError("unknown input_layer: " + input_layer)
@@ -182,8 +187,8 @@ class MLMTransformerEncoder(AbsEncoder):
 
     def forward(
         self,
-        xs_pad: torch.Tensor,
-        ilens: torch.Tensor,
+        speech_pad: torch.Tensor,
+        text_pad: torch.Tensor,
         masked_position: torch.Tensor,
         prev_states: torch.Tensor = None,
         attention_mask: torch.Tensor = None
@@ -197,13 +202,12 @@ class MLMTransformerEncoder(AbsEncoder):
         Returns:
             position embedded tensor and mask
         """
-        if attention_mask is None:
-            attention_mask = (~make_pad_mask(ilens)[:, None, :]).to(xs_pad.device)
-
         if masked_position is not None:
-            xs_pad = self.embed(xs_pad, masked_position)
+            speech_pad = self.embed(speech_pad, masked_position)
         else:
-            xs_pad = self.embed(xs_pad)
+            speech_pad = self.embed(speech_pad)
+        text_pad = self.text_embed(text_pad)
+        xs_pad = torch.cat([speech_pad, text_pad], axis=1)
         xs_pad, masks = self.encoders(xs_pad, attention_mask)
         if self.normalize_before:
             xs_pad = self.after_norm(xs_pad)

@@ -349,6 +349,7 @@ class ESPnetMLMModel(AbsESPnetModel):
         report_wer: bool = True,
         sym_space: str = "<space>",
         sym_blank: str = "<blank>",
+        masking_schema: str = "span",
     ):
         assert check_argument_types()
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
@@ -395,18 +396,46 @@ class ESPnetMLMModel(AbsESPnetModel):
         self.finetune_wo_mlm =True
         self.max_span = 50
         self.min_span = 4
-        self.span = True
+        self.masking_schema = masking_schema
         if self.mlm_weight > 0 and self.mlm_prob > 0:
             self.sfc = torch.nn.Linear(self.encoder._output_size, odim)
             self.loss_func = torch.nn.L1Loss(reduce=False)
             # self.loss_func = torch.nn.MSELoss(reduce=False)
 
+    def collect_feats(
+        self,
+        speech: torch.Tensor,
+        speech_lengths: torch.Tensor,
+        text: torch.Tensor,
+        text_lengths: torch.Tensor,
+        align_start: torch.Tensor,
+        align_start_lengths: torch.Tensor,
+        align_end: torch.Tensor,
+        align_end_lengths: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        if self.feats_extract:
+            feats, feats_lengths = self.feats_extract(speech, speech_lengths)
+        else:
+            # Generate dummy stats if extract_feats_in_collect_stats is False
+            logging.warning(
+                "Generating dummy stats for feats and feats_lengths, "
+                "because encoder_conf.extract_feats_in_collect_stats is "
+                f"{self.extract_feats_in_collect_stats}"
+            )
+            feats, feats_lengths = speech, speech_lengths
+        return {"feats": feats, "feats_lengths": feats_lengths}
+
+
     def forward(
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
-        # text: torch.Tensor,
-        # text_lengths: torch.Tensor,
+        text: torch.Tensor,
+        text_lengths: torch.Tensor,
+        align_start: torch.Tensor,
+        align_start_lengths: torch.Tensor,
+        align_end: torch.Tensor,
+        align_end_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
         """Frontend + Encoder + Decoder + Calc loss
 
@@ -421,8 +450,6 @@ class ESPnetMLMModel(AbsESPnetModel):
         assert (
             speech.shape[0]
             == speech_lengths.shape[0]
-            # == text.shape[0]
-            # == text_lengths.shape[0]
         ), (speech.shape, speech_lengths.shape) #, text.shape, text_lengths.shape)
         batch_size = speech.shape[0]
 
@@ -430,7 +457,8 @@ class ESPnetMLMModel(AbsESPnetModel):
         # text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens, xs_pad, masked_position = self.encode(speech, speech_lengths)
+        encoder_out, encoder_out_lens, xs_pad, masked_position = self.encode(speech, speech_lengths, 
+        text, text_lengths, align_start, align_end, align_start_lengths)
 
         # 2a. Attention-decoder branch
         if self.ctc_weight == 1.0:
@@ -467,28 +495,12 @@ class ESPnetMLMModel(AbsESPnetModel):
         return loss, stats, weight
 
 
-    def collect_feats(
-        self,
-        speech: torch.Tensor,
-        speech_lengths: torch.Tensor,
-        # text: torch.Tensor,
-        # text_lengths: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        if self.feats_extract:
-            feats, feats_lengths = self.feats_extract(speech, speech_lengths)
-        else:
-            # Generate dummy stats if extract_feats_in_collect_stats is False
-            logging.warning(
-                "Generating dummy stats for feats and feats_lengths, "
-                "because encoder_conf.extract_feats_in_collect_stats is "
-                f"{self.extract_feats_in_collect_stats}"
-            )
-            feats, feats_lengths = speech, speech_lengths
-        return {"feats": feats, "feats_lengths": feats_lengths}
-
-
     def encode(
-        self, speech: torch.Tensor, speech_lengths: torch.Tensor
+        self, speech: torch.Tensor, speech_lengths: torch.Tensor,
+        text: torch.Tensor, text_lengths: torch.Tensor,
+        align_start: torch.Tensor,
+        align_end: torch.Tensor,
+        align_start_lengths: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Frontend + Encoder. Note that this method is used by asr_inference.py
 
@@ -504,47 +516,62 @@ class ESPnetMLMModel(AbsESPnetModel):
                 # Use precalculated feats (feats_type != raw case)
                 feats, feats_lengths = speech, speech_lengths
 
-            # 3. Normalization for feature: e.g. Global-CMVN, Utterance-CMVN
-            if self.normalize is not None:
-                feats, feats_lengths = self.normalize(feats, feats_lengths)
-
-        max_ilen = max(feats_lengths).item()
-        round = max_ilen % self.encoder.attention_window
+            # # 3. Normalization for feature: e.g. Global-CMVN, Utterance-CMVN
+            # if self.normalize is not None:
+            #     feats, feats_lengths = self.normalize(feats, feats_lengths)
+            align_start = torch.floor(self.feats_extract.fs*align_start/self.feats_extract.hop_length).int()
+            align_end = torch.floor(self.feats_extract.fs*align_end/self.feats_extract.hop_length).int()
+        # s_t_lengths = feats_lengths+text_lengths
+        max_tlen = max(text_lengths).item()
+        max_slen = max(feats_lengths).item()
+        max_len = max_slen + max_tlen
+        round = max_len % self.encoder.attention_window
         if round != 0:
-            max_ilen += (self.encoder.attention_window - round)
-            n_batch = feats.shape[0]
-            xs_pad = feats.new_zeros(n_batch, max_ilen, *feats[0].size()[1:])
+            max_tlen += (self.encoder.attention_window - round)
+            n_batch = text.shape[0]
+            text_pad = text.new_zeros(n_batch, max_tlen, *text[0].size()[1:])
             for i in range(n_batch):
-                xs_pad[i, : feats[i].size(0)] = feats[i]
+                text_pad[i, : text[i].size(0)] = text[i]
         else:
-            xs_pad = feats[:, : max_ilen]
-        src_mask = make_non_pad_mask(feats_lengths.tolist(), xs_pad[:,:,0], length_dim=1).to(xs_pad.device).unsqueeze(-2)
+            text_pad = text[:, : max_tlen]
+        speech_pad = feats[:, : max_slen]
+        text_mask = make_non_pad_mask(text_lengths.tolist(), text_pad, length_dim=1).to(text_pad.device).unsqueeze(-2)*2
+        speech_mask = make_non_pad_mask(feats_lengths.tolist(), speech_pad[:,:,0], length_dim=1).to(speech_pad.device).unsqueeze(-2)
         # 5*1171*80
-        xs_pad_placeholder = xs_pad.detach().clone()
+        speech_pad_placeholder = speech_pad.detach().clone()
         # 5*1*1171
-        src_mask_placeholder = src_mask
-        if self.span:
-            masked_position = self.span_masking(xs_pad, 
-                                                src_mask_placeholder, 
+        speech_mask_placeholder = speech_mask
+        text_mask_placeholder = text_mask
+        if self.masking_schema=='span':
+            masked_position = self.span_masking(speech_pad, 
+                                                speech_mask_placeholder, 
                                                 self.mlm_prob, 
                                                 max_span=self.max_span, min_span=self.min_span)
+        elif self.masking_schema == 'phn_span':
+            masked_position = self.phones_masking(speech_pad,
+                                                speech_mask_placeholder,
+                                                align_start,
+                                                align_end,
+                                                align_start_lengths,
+                                                self.mlm_prob,
+                                                max_span=5, min_span=1)
         else:
-            masked_position = self.random_masking(xs_pad, 
-                                                src_mask_placeholder, 
+            masked_position = self.random_masking(speech_pad, 
+                                                speech_mask_placeholder, 
                                                 self.mlm_prob)
         # Make batch for mlm inputs
         batch = dict(
-            xs_pad=xs_pad,
-            ilens=feats_lengths,
+            speech_pad=speech_pad,
+            text_pad=text_pad,
             masked_position=masked_position,
-            attention_mask=src_mask_placeholder,
+            attention_mask=torch.cat([speech_mask,text_mask],axis=-1),
         )
         # 4. Forward encoder
         # feats: (Batch, Length, Dim)
         # -> encoder_out: (Batch, Length2, Dim2)
         encoder_out, encoder_out_lens, _ = self.encoder(**batch)
         
-        return encoder_out, encoder_out_lens, xs_pad_placeholder, masked_position
+        return encoder_out[:,:max_slen,:], encoder_out_lens, speech_pad_placeholder, masked_position
         
     def _calc_mlm_loss(
         self,
@@ -557,7 +584,7 @@ class ESPnetMLMModel(AbsESPnetModel):
         # mlm_loss_position = (true_label_position + masked_position) > 0
         mlm_loss_position = masked_position>0
         copy_loss_position = true_label_position>0
-        mse_loss = self.loss_func(self.sfc(encoder_out.view(-1, self.encoder._output_size)), 
+        mse_loss = self.loss_func(self.sfc(encoder_out.reshape(-1, self.encoder._output_size)), 
                                             xs_pad.view(-1, self.odim)).sum(dim=-1)
         loss_mlm = (mse_loss * mlm_loss_position.view(-1).float()).sum() \
                                             / (mlm_loss_position.float().sum() + 1e-10)
@@ -567,6 +594,24 @@ class ESPnetMLMModel(AbsESPnetModel):
         # loss_mlm = ( * mlm_loss_position.view(-1).float()).sum() \
         #                                     / (mlm_loss_position.float().sum() + 1e-10)
         return loss_mlm, loss_copy
+
+    def phones_masking(self, xs_pad, src_mask, align_start, align_end, align_start_lengths, mask_prob, max_span=5, min_span=1):
+        assert max_span >= min_span
+        bz, sent_len, _ = xs_pad.size()
+        mask_num_lower = math.ceil(sent_len * mask_prob)
+        masked_position = np.zeros((bz, sent_len))
+
+        for idx in range(bz):
+            masked_phn_indices = torch.randperm(align_start_lengths[idx])[:align_start_lengths[idx]//5]
+            masked_start = align_start[idx][masked_phn_indices].tolist()
+            masked_end = align_end[idx][masked_phn_indices].tolist()
+            for s,e in zip(masked_start, masked_end):
+                masked_position[idx, s:e] = 1
+        non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
+        # non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
+        masked_position = masked_position * non_eos_mask
+        return torch.BoolTensor(masked_position).to(xs_pad.device)
+
 
     def random_masking(self, xs_pad, src_mask, mask_prob):
         masked_position = np.random.rand(*xs_pad.size()[:2]) < mask_prob

@@ -331,6 +331,10 @@ class LongformerAttention(nn.Module):
         self.query = nn.Linear(n_feat, n_feat)
         self.key = nn.Linear(n_feat, n_feat)
         self.value = nn.Linear(n_feat, n_feat)
+        self.query_global = nn.Linear(n_feat, n_feat)
+        self.key_global = nn.Linear(n_feat, n_feat)
+        self.value_global = nn.Linear(n_feat, n_feat)
+
         self.linear_out = nn.Linear(n_feat, n_feat)
         self.attn = None
         self.dropout = nn.Dropout(p=dropout_rate)
@@ -895,9 +899,8 @@ class LongformerAttention(nn.Module):
                 batch_size * self.num_heads, max_num_global_attn_indices, seq_len
             )
 
-        global_attn_probs = nn.functional.dropout(
-            global_attn_probs_float.type_as(global_attn_scores), p=self.dropout, training=self.training
-        )
+        global_attn_probs = self.dropout(
+            global_attn_probs_float.type_as(global_attn_scores))
 
         # global attn output
         global_attn_output = torch.bmm(global_attn_probs, global_value_vectors)
@@ -1039,7 +1042,7 @@ class LongformerAttention(nn.Module):
                 )
             attn_weights = attn_weights.view(bsz * self.h, max_num_extra_indices_per_batch, seq_len)
             attn_weights_float = F.softmax(attn_weights, dim=-1, dtype=torch.float32)  # use fp32 for numerical stability
-            attn_probs = F.dropout(attn_weights_float.type_as(attn_weights), p=self.dropout, training=self.training)
+            attn_probs = self.dropout(attn_weights_float.type_as(attn_weights))
             selected_attn = torch.bmm(attn_probs, v)
             assert list(selected_attn.size()) == [bsz * self.h, max_num_extra_indices_per_batch, self.d_k]
 

@@ -24,14 +24,14 @@ else
     opts="--audio_format flac "
 fi
 
-train_config=conf/train_mlm.yaml
+train_config=conf/train_mlm_phn.yaml
 # inference_config=conf/decode.yaml
 
 cleaner=tacotron
 g2p=g2p_en_no_space # or g2p_en
 local_data_opts="--trim_all_silence true" # trim all silence in the audio
 
-exp_name="exp/mlm_460h_0.25p_l1loss"
+exp_name="exp/mlm_phn_span_mask"
 
 ./mlm.sh \
     --fs "${fs}" \
@@ -44,7 +44,8 @@ exp_name="exp/mlm_460h_0.25p_l1loss"
     --ngpu ${ngpu} \
     --num_nodes ${nnodes} \
     --dataset_name libritts \
-    --token_type bpe \
+    --token_type phn \
+    --phn_as_word true \
     --feats_type raw \
     --local_data_opts "${local_data_opts}" \
     --train_set "${train_set}" \

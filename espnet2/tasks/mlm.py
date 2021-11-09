@@ -199,9 +199,9 @@ class MLMTask(AbsTask):
         )
         group.add_argument(
             "--token_type",
-            type=str,
-            default="bpe",
-            choices=["bpe", "char", "word", "phn"],
+            type=str_or_none,
+            default=None,
+            choices=[None, "bpe", "char", "word", "phn"],
             help="The text will be tokenized " "in the specified level token",
         )
         group.add_argument(
@@ -279,8 +279,7 @@ class MLMTask(AbsTask):
         Tuple[List[str], Dict[str, torch.Tensor]],
     ]:
         assert check_argument_types()
-        # NOTE(kamo): int value = 0 is reserved by CTC-blank symbol
-        return CommonCollateFn(float_pad_value=0.0, int_pad_value=-1)
+        return CommonCollateFn(float_pad_value=0.0, int_pad_value=0)
 
     @classmethod
     def build_preprocess_fn(
@@ -306,11 +305,7 @@ class MLMTask(AbsTask):
     def required_data_names(
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
-        if not inference:
-            retval = ("speech",)
-        else:
-            # Recognition mode
-            retval = ("speech",)
+        retval = ("speech","text","align_start","align_end")
         return retval
 
     @classmethod
@@ -360,7 +355,7 @@ class MLMTask(AbsTask):
 
         # 4. Encoder
         encoder_class = encoder_choices.get_class(args.encoder)
-        encoder = encoder_class(input_size=args.input_size, **args.encoder_conf)
+        encoder = encoder_class(vocab_size=vocab_size,input_size=args.input_size, **args.encoder_conf)
         encoder_output_size = encoder.output_size()
 
         # # 5. Decoder
