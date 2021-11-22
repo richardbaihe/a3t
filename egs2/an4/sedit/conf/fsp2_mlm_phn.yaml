@@ -1,0 +1,59 @@
+batch_type: numel
+batch_bins: 18000000
+sort_batch: descending
+sort_in_batch: descending
+num_iters_per_epoch: 500
+accum_grad: 1
+grad_clip: 1.0
+grad_noise: false 
+max_epoch: 500
+train_dtype: float32
+num_workers: 1
+# batch_size: 48
+
+# The initialization method for model parameters
+init: xavier_uniform
+best_model_criterion:
+-   - valid
+    - loss
+    - min
+keep_nbest_models: 10
+
+encoder: transformer
+encoder_conf:
+    output_size: 384
+    attention_heads: 2
+    linear_units: 1536
+    num_blocks: 6
+    dropout_rate: 0.2
+    positional_dropout_rate: 0.2
+    attention_dropout_rate: 0.2
+    input_layer: sega_mlm
+    attention_window: 256
+    normalize_before: true
+
+decoder: transformer_encoder
+decoder_conf:
+    attention_dim: 384
+    attention_heads: 2
+    linear_units: 1536
+    num_blocks: 4
+    dropout_rate: 0.2
+    positional_dropout_rate: 0.2
+    attention_dropout_rate: 0.2
+
+model_conf:
+    ctc_weight: 0
+    lsm_weight: 0.1
+    length_normalized_loss: false
+    masking_schema: phn_span
+    mean_phn_span: 8
+    mlm_prob: 0.4
+
+optim: adam
+optim_conf:
+    lr: 1.0
+scheduler: noamlr
+scheduler_conf:
+    model_size: 384
+    warmup_steps: 4000

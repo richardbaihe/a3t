@@ -318,7 +318,7 @@ class LongformerAttention(nn.Module):
 
     """
 
-    def __init__(self, n_head, n_feat, dropout_rate, attention_window, attention_dilation):
+    def __init__(self, n_head, n_feat, dropout_rate, attention_window, attention_dilation, no_global=False):
         """Construct an LongformerAttention object."""
         super(LongformerAttention, self).__init__()
         assert n_feat % n_head == 0
@@ -331,9 +331,11 @@ class LongformerAttention(nn.Module):
         self.query = nn.Linear(n_feat, n_feat)
         self.key = nn.Linear(n_feat, n_feat)
         self.value = nn.Linear(n_feat, n_feat)
-        self.query_global = nn.Linear(n_feat, n_feat)
-        self.key_global = nn.Linear(n_feat, n_feat)
-        self.value_global = nn.Linear(n_feat, n_feat)
+        self.no_global = no_global
+        if not self.no_global:
+            self.query_global = nn.Linear(n_feat, n_feat)
+            self.key_global = nn.Linear(n_feat, n_feat)
+            self.value_global = nn.Linear(n_feat, n_feat)
 
         self.linear_out = nn.Linear(n_feat, n_feat)
         self.attn = None
@@ -408,7 +410,7 @@ class LongformerAttention(nn.Module):
         ], f"local_attn_probs should be of size ({batch_size}, {seq_len}, {self.num_heads}, {self.one_sided_attn_window_size * 2 + 1}), but is of size {attn_scores.size()}"
 
         # compute local attention probs from global attention keys and contact over window dim
-        if is_global_attn:
+        if is_global_attn and not self.no_global:
             # compute global attn indices required through out forward fn
             (
                 max_num_global_attn_indices,
@@ -456,7 +458,7 @@ class LongformerAttention(nn.Module):
         value_vectors = value_vectors.view(seq_len, batch_size, self.num_heads, self.head_dim).transpose(0, 1)
 
         # compute local attention output with global attention value and add
-        if is_global_attn:
+        if is_global_attn and not self.no_global:
             # compute sum of global and local attn
             attn_output = self._compute_attn_output_with_global_indices(
                 value_vectors=value_vectors,
@@ -476,7 +478,7 @@ class LongformerAttention(nn.Module):
 
         # compute value for global attention and overwrite to attention output
         # TODO: remove the redundant computation
-        if is_global_attn:
+        if is_global_attn and not self.no_global:
             global_attn_output, global_attn_probs = self._compute_global_attn_output_from_hidden(
                 hidden_states=hidden_states,
                 max_num_global_attn_indices=max_num_global_attn_indices,
@@ -531,6 +533,7 @@ class LongformerAttention(nn.Module):
             attention_mask = self._merge_to_attention_mask(attention_mask, global_attention_mask)
 
         # attn_weights = (bsz, seq_len, h, window*2+1)
+        attention_mask += 1
         return self.forward_attention(key, attention_mask)
 
     def _merge_to_attention_mask(self, attention_mask: torch.Tensor, global_attention_mask: torch.Tensor):

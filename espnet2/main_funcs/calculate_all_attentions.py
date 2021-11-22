@@ -18,7 +18,7 @@ from espnet.nets.pytorch_backend.rnn.attentions import AttMultiHeadDot
 from espnet.nets.pytorch_backend.rnn.attentions import AttMultiHeadLoc
 from espnet.nets.pytorch_backend.rnn.attentions import AttMultiHeadMultiResLoc
 from espnet.nets.pytorch_backend.rnn.attentions import NoAtt
-from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttention
+from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttention, LongformerAttention
 
 
 from espnet2.train.abs_espnet_model import AbsESPnetModel
@@ -49,7 +49,7 @@ def calculate_all_attentions(
     for name, modu in model.named_modules():
 
         def hook(module, input, output, name=name):
-            if isinstance(module, MultiHeadedAttention):
+            if isinstance(module, MultiHeadedAttention) or isinstance(module, LongformerAttention):
                 # NOTE(kamo): MultiHeadedAttention doesn't return attention weight
                 # attn: (B, Head, Tout, Tin)
                 outputs[name] = module.attn.detach().cpu()

@@ -337,3 +337,77 @@ class Decoder(BatchScorerInterface, torch.nn.Module):
         # transpose state of [layer, batch] into [batch, layer]
         state_list = [[states[i][b] for i in range(n_layers)] for b in range(n_batch)]
         return logp, state_list
+
+
+class SegDecoder(Decoder):
+
+    def forward(self, tgt, tgt_mask, memory, memory_mask, seg_emb=None):
+        """Forward decoder.
+
+        Args:
+            tgt (torch.Tensor): Input token ids, int64 (#batch, maxlen_out) if
+                input_layer == "embed". In the other case, input tensor
+                (#batch, maxlen_out, odim).
+            tgt_mask (torch.Tensor): Input token mask (#batch, maxlen_out).
+                dtype=torch.uint8 in PyTorch 1.2- and dtype=torch.bool in PyTorch 1.2+
+                (include 1.2).
+            memory (torch.Tensor): Encoded memory, float32 (#batch, maxlen_in, feat).
+            memory_mask (torch.Tensor): Encoded memory mask (#batch, maxlen_in).
+                dtype=torch.uint8 in PyTorch 1.2- and dtype=torch.bool in PyTorch 1.2+
+                (include 1.2).
+
+        Returns:
+            torch.Tensor: Decoded token score before softmax (#batch, maxlen_out, odim)
+                   if use_output_layer is True. In the other case,final block outputs
+                   (#batch, maxlen_out, attention_dim).
+            torch.Tensor: Score mask before softmax (#batch, maxlen_out).
+
+        """
+        x = self.embed(tgt)
+        if seg_emb is not None:
+            x += seg_emb
+        x, tgt_mask, memory, memory_mask = self.decoders(
+            x, tgt_mask, memory, memory_mask
+        )
+        if self.normalize_before:
+            x = self.after_norm(x)
+        if self.output_layer is not None:
+            x = self.output_layer(x)
+        return x, tgt_mask
+    def forward_one_step(self, tgt, tgt_mask, memory, memory_mask, seg_emb=None, cache=None, idx=0):
+        """Forward one step.
+
+        Args:
+            tgt (torch.Tensor): Input token ids, int64 (#batch, maxlen_out).
+            tgt_mask (torch.Tensor): Input token mask (#batch, maxlen_out).
+                dtype=torch.uint8 in PyTorch 1.2- and dtype=torch.bool in PyTorch 1.2+
+                (include 1.2).
+            memory (torch.Tensor): Encoded memory, float32 (#batch, maxlen_in, feat).
+            cache (List[torch.Tensor]): List of cached tensors.
+                Each tensor shape should be (#batch, maxlen_out - 1, size).
+
+        Returns:
+            torch.Tensor: Output tensor (batch, maxlen_out, odim).
+            List[torch.Tensor]: List of cache tensors of each decoder layer.
+
+        """
+        x = self.embed(tgt)
+        if seg_emb is not None:
+            x += seg_emb
+        # cache = [x[:,1:,:]] * len(self.decoders)
+        cache = [None]*len(self.decoders)
+        for c, decoder in zip(cache, self.decoders):
+            x, tgt_mask, memory, memory_mask = decoder(
+                x, tgt_mask, memory, memory_mask, cache=c
+            )
+
+        if self.normalize_before:
+            y = self.after_norm(x[:, idx])
+        else:
+            y = x[:, idx]
+
+        if self.output_layer is not None:
+            y = self.output_layer(y)
+            
+        return y, cache
+

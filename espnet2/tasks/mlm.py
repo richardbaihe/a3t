@@ -25,20 +25,22 @@ from espnet2.asr.decoder.transformer_decoder import (
 from espnet2.asr.decoder.transformer_decoder import (
     LightweightConvolutionTransformerDecoder,  # noqa: H301
 )
-from espnet2.asr.decoder.transformer_decoder import TransformerDecoder
+from espnet.nets.pytorch_backend.transformer.decoder import SegDecoder as TransformerDecoder
+from espnet.nets.pytorch_backend.tacotron2.decoder import Prenet as DecoderPrenet
+# from espnet2.asr.decoder.transformer_decoder import TransformerDecoder
 from espnet2.asr.encoder.abs_encoder import AbsEncoder
 from espnet2.asr.encoder.conformer_encoder import ConformerEncoder
 from espnet2.asr.encoder.mlm_encoder import MLMTransformerEncoder
 from espnet2.asr.encoder.hubert_encoder import FairseqHubertEncoder
 from espnet2.asr.encoder.hubert_encoder import FairseqHubertPretrainEncoder
 from espnet2.asr.encoder.rnn_encoder import RNNEncoder
-from espnet2.asr.encoder.transformer_encoder import TransformerEncoder
+from espnet.nets.pytorch_backend.transformer.encoder import Encoder as TransformerEncoder
 from espnet2.asr.encoder.contextual_block_transformer_encoder import (
     ContextualBlockTransformerEncoder,  # noqa: H301
 )
 from espnet2.asr.encoder.vgg_rnn_encoder import VGGRNNEncoder
 from espnet2.asr.encoder.wav2vec2_encoder import FairSeqWav2Vec2Encoder
-from espnet2.asr.espnet_model import ESPnetMLMModel
+from espnet2.asr.espnet_model import ESPnetMLMModel, ESPnetMLMDecoderModel,ESPnetMLMEncAsDecoderModel
 from espnet2.asr.frontend.abs_frontend import AbsFrontend
 from espnet2.asr.frontend.default import DefaultFrontend
 from espnet2.asr.frontend.s3prl import S3prlFrontend
@@ -67,6 +69,8 @@ from espnet2.utils.types import float_or_none
 from espnet2.utils.types import int_or_none
 from espnet2.utils.types import str2bool
 from espnet2.utils.types import str_or_none
+from espnet.nets.pytorch_backend.transformer.embedding import ScaledPositionalEncoding
+from espnet.nets.pytorch_backend.transformer.embedding import PositionalEncoding
 
 feats_extractor_choices = ClassChoices(
     "feats_extract",
@@ -101,19 +105,24 @@ encoder_choices = ClassChoices(
     default="transformer",
 )
 
-# decoder_choices = ClassChoices(
-#     "decoder",
-#     classes=dict(
-#         transformer=TransformerDecoder,
-#         lightweight_conv=LightweightConvolutionTransformerDecoder,
-#         lightweight_conv2d=LightweightConvolution2DTransformerDecoder,
-#         dynamic_conv=DynamicConvolutionTransformerDecoder,
-#         dynamic_conv2d=DynamicConvolution2DTransformerDecoder,
-#         rnn=RNNDecoder,
-#     ),
-#     type_check=AbsDecoder,
-#     default="rnn",
-# )
+decoder_choices = ClassChoices(
+    "decoder",
+    classes=dict(
+        transformer=TransformerDecoder,
+        transformer_encoder=TransformerEncoder,
+        no_decoder=TransformerDecoder
+    ),
+    default="transformer",
+)
+
+pre_decoder_choices = ClassChoices(
+    "pre_decoder",
+    classes=dict(
+        linear=DecoderPrenet
+    ),
+    default="linear",
+)
+
 
 
 class MLMTask(AbsTask):
@@ -129,7 +138,8 @@ class MLMTask(AbsTask):
         # --encoder and --encoder_conf
         encoder_choices,
         # # --decoder and --decoder_conf
-        # decoder_choices,
+        decoder_choices,
+        pre_decoder_choices,
     ]
 
     # If you need to modify train() or eval() procedures, change Trainer class here
@@ -189,7 +199,12 @@ class MLMTask(AbsTask):
             default=get_default_kwargs(ESPnetMLMModel),
             help="The keyword arguments for model class.",
         )
-
+        group.add_argument(
+            "--use_scaled_pos_enc",
+            type=str2bool,
+            default=False,
+            help="use scaled pos or vanilla pos",
+        )
         group = parser.add_argument_group(description="Preprocess related")
         group.add_argument(
             "--use_preprocessor",
@@ -352,21 +367,38 @@ class MLMTask(AbsTask):
         else:
             normalize = None
 
-
+        pos_enc_class = ScaledPositionalEncoding if args.use_scaled_pos_enc else PositionalEncoding
         # 4. Encoder
         encoder_class = encoder_choices.get_class(args.encoder)
-        encoder = encoder_class(vocab_size=vocab_size,input_size=args.input_size, **args.encoder_conf)
+        
+        encoder = encoder_class(vocab_size=vocab_size,input_size=args.input_size, pos_enc_class=pos_enc_class,
+        **args.encoder_conf)
         encoder_output_size = encoder.output_size()
 
         # # 5. Decoder
-        # decoder_class = decoder_choices.get_class(args.decoder)
-
-        # decoder = decoder_class(
-        #     vocab_size=vocab_size,
-        #     encoder_output_size=encoder_output_size,
-        #     **args.decoder_conf,
-        # )
-        decoder = None
+        if args.decoder != 'no_decoder' and 'encoder' not in args.decoder:
+            decoder_class = decoder_choices.get_class(args.decoder)
+            decoder_input_layer = torch.nn.Sequential(
+                    DecoderPrenet(
+                        idim=odim,
+                        **args.pre_decoder_conf
+                    ),
+                    torch.nn.Linear(256, encoder.output_size()),
+                )
+            decoder = decoder_class(
+                odim=odim,
+                input_layer=decoder_input_layer,
+                **args.decoder_conf,
+            )
+        elif 'encoder' in args.decoder:
+            decoder_class = decoder_choices.get_class(args.decoder)
+            decoder = decoder_class(
+                idim=0,
+                input_layer=None,
+                **args.decoder_conf,
+            )
+        else:
+            decoder = None
         # 6. CTC
         ctc = CTC(
             odim=vocab_size, encoder_output_sizse=encoder_output_size, **args.ctc_conf
@@ -374,16 +406,39 @@ class MLMTask(AbsTask):
 
 
         # 8. Build model
-        model = ESPnetMLMModel(
-            feats_extract=feats_extract,
-            odim=odim,
-            normalize=normalize,
-            encoder=encoder,
-            decoder=decoder,
-            ctc=ctc,
-            token_list=token_list,
-            **args.model_conf,
-        )
+        if decoder is not None and 'encoder' not in args.decoder:
+            model = ESPnetMLMDecoderModel(
+                feats_extract=feats_extract,
+                odim=odim,
+                normalize=normalize,
+                encoder=encoder,
+                decoder=decoder,
+                ctc=ctc,
+                token_list=token_list,
+                **args.model_conf,
+            )
+        if 'encoder' in args.decoder:
+            model = ESPnetMLMEncAsDecoderModel(
+                feats_extract=feats_extract,
+                odim=odim,
+                normalize=normalize,
+                encoder=encoder,
+                decoder=decoder,
+                ctc=ctc,
+                token_list=token_list,
+                **args.model_conf,
+            )
+        else:
+            model = ESPnetMLMModel(
+                feats_extract=feats_extract,
+                odim=odim,
+                normalize=normalize,
+                encoder=encoder,
+                decoder=decoder,
+                ctc=ctc,
+                token_list=token_list,
+                **args.model_conf,
+            )
 
         # 9. Initialize
         if args.init is not None:

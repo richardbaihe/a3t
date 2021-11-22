@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from espnet2.tasks.mlm import MLMTask
-
+import os
+# os.environ['TORCH_DISTRIBUTED_DEBUG']="DETAIL"
 
 def get_parser():
     parser = MLMTask.get_parser()
