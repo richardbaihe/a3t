@@ -168,6 +168,7 @@ class Trainer:
         plot_attention_iter_factory: Optional[AbsIterFactory],
         trainer_options,
         distributed_option: DistributedOption,
+        collate_fn_iepoch=None
     ) -> None:
         """Perform training. This method performs the main process of training."""
         assert check_argument_types()
@@ -184,8 +185,14 @@ class Trainer:
             use_cluster = False
 
         if use_cluster:
-            resume_command, death_time = slurm.restart_command()
-            # print('| restart command:', " ".join(resume_command))    
+            resume_command, death_time, jobID = slurm.restart_command()
+            info = slurm.job_info()
+            job_name = info.get("JobName")
+            workdir = info.get("WorkDir")
+            jobID = info.get('jobID')
+            resume_command = ["bash",os.path.join(workdir, job_name.replace('train.log','run.sh'))]
+            # print('| restart command:', " ".join(resume_command))
+            # print('| working dir:',os.getcwd())
 
         if isinstance(trainer_options.keep_nbest_models, int):
             keep_nbest_models = trainer_options.keep_nbest_models
@@ -291,13 +298,16 @@ class Trainer:
             set_all_random_seed(trainer_options.seed + iepoch)
 
             reporter.set_epoch(iepoch)
+            collate_fn = None
+            if collate_fn_iepoch is not None:
+                collate_fn = collate_fn_iepoch(iepoch)
             # 1. Train and validation for one-epoch
             with reporter.observe("train") as sub_reporter:
                 all_steps_are_invalid = cls.train_one_epoch(
                     model=dp_model,
                     optimizers=optimizers,
                     schedulers=schedulers,
-                    iterator=train_iter_factory.build_iter(iepoch),
+                    iterator=train_iter_factory.build_iter(iepoch,collate_fn=collate_fn),
                     reporter=sub_reporter,
                     scaler=scaler,
                     summary_writer=summary_writer,
@@ -452,8 +462,13 @@ class Trainer:
 
             if done:
                 if distributed_option.dist_rank == 0:
-                    print('| Running restart command:', " ".join(resume_command))    
-                    subprocess.check_call(resume_command)
+                    print('| Running restart command:', " ".join(resume_command), "with workdir:", os.getcwd())    
+                    subprocess.check_call(resume_command,cwd=os.getcwd())
+                    time.sleep(2)
+                    scancel_command = ["scancel", jobID]
+                    subprocess.check_call(scancel_command)
+                    time.sleep(20)
+                    break
                 break
         else:
             logging.info(

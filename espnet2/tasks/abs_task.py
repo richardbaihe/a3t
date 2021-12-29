@@ -1280,6 +1280,9 @@ class AbsTask(ABC):
             # Don't give args to trainer.run() directly!!!
             # Instead of it, define "Options" object and build here.
             trainer_options = cls.trainer.build_options(args)
+            def build_collate_fn_with_epoch(epoch):
+                return cls.build_collate_fn(args, train=True,epoch=epoch)
+            collate_fn_iepoch = build_collate_fn_with_epoch if 'dynamic_mlm_prob' in args.model_conf and args.model_conf['dynamic_mlm_prob'] else None
             cls.trainer.run(
                 model=model,
                 optimizers=optimizers,
@@ -1289,6 +1292,7 @@ class AbsTask(ABC):
                 plot_attention_iter_factory=plot_attention_iter_factory,
                 trainer_options=trainer_options,
                 distributed_option=distributed_option,
+                collate_fn_iepoch=collate_fn_iepoch
             )
 
             if wandb.run:

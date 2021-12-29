@@ -6,46 +6,25 @@ from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Tuple
+from typing import Union
+from pathlib import Path
 
+import yaml
 import numpy as np
 import torch
 from typeguard import check_argument_types
 from typeguard import check_return_type
 
-from espnet2.asr.ctc import CTC
-from espnet2.asr.decoder.abs_decoder import AbsDecoder
-from espnet2.asr.decoder.rnn_decoder import RNNDecoder
-from espnet2.asr.decoder.transformer_decoder import (
-    DynamicConvolution2DTransformerDecoder,  # noqa: H301
-)
-from espnet2.asr.decoder.transformer_decoder import DynamicConvolutionTransformerDecoder
-from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolution2DTransformerDecoder,  # noqa: H301
-)
-from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolutionTransformerDecoder,  # noqa: H301
-)
-from espnet.nets.pytorch_backend.transformer.decoder import SegDecoder as TransformerDecoder
 from espnet.nets.pytorch_backend.tacotron2.decoder import Prenet as DecoderPrenet
-# from espnet2.asr.decoder.transformer_decoder import TransformerDecoder
-from espnet2.asr.encoder.abs_encoder import AbsEncoder
-from espnet2.asr.encoder.conformer_encoder import ConformerEncoder
-from espnet2.asr.encoder.mlm_encoder import MLMTransformerEncoder
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertEncoder
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertPretrainEncoder
-from espnet2.asr.encoder.rnn_encoder import RNNEncoder
-from espnet.nets.pytorch_backend.transformer.encoder import Encoder as TransformerEncoder
-from espnet2.asr.encoder.contextual_block_transformer_encoder import (
-    ContextualBlockTransformerEncoder,  # noqa: H301
-)
-from espnet2.asr.encoder.vgg_rnn_encoder import VGGRNNEncoder
-from espnet2.asr.encoder.wav2vec2_encoder import FairSeqWav2Vec2Encoder
-from espnet2.asr.espnet_model import ESPnetMLMModel, ESPnetMLMDecoderModel,ESPnetMLMEncAsDecoderModel
-from espnet2.asr.frontend.abs_frontend import AbsFrontend
-from espnet2.asr.frontend.default import DefaultFrontend
-from espnet2.asr.frontend.s3prl import S3prlFrontend
-from espnet2.asr.frontend.windowing import SlidingWindow
-from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
+
+from espnet.nets.pytorch_backend.transformer.encoder import MLMEncoder as TransformerEncoder
+from espnet.nets.pytorch_backend.transformer.encoder import MLMDecoder as TransformerDecoder
+from espnet.nets.pytorch_backend.conformer.encoder import MLMEncoder as ConformerEncoder
+from espnet.nets.pytorch_backend.conformer.encoder import MLMDecoder as ConformerDecoder
+
+from espnet2.tts.sedit.sedit_model import ESPnetMLMModel, ESPnetMLMDecoderModel,ESPnetMLMEncAsDecoderModel
+from espnet2.train.abs_espnet_model import AbsESPnetModel
+
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
     HuggingFaceTransformersPostEncoder,  # noqa: H301
 )
@@ -60,7 +39,7 @@ from espnet2.tasks.abs_task import AbsTask
 from espnet2.text.phoneme_tokenizer import g2p_choices
 from espnet2.torch_utils.initialize import initialize
 from espnet2.train.class_choices import ClassChoices
-from espnet2.train.collate_fn import CommonCollateFn
+from espnet2.train.collate_fn import CommonCollateFn, MLMCollateFn
 from espnet2.train.preprocessor import CommonPreprocessor
 from espnet2.train.trainer import Trainer
 from espnet2.utils.get_default_kwargs import get_default_kwargs
@@ -90,18 +69,13 @@ normalize_choices = ClassChoices(
     optional=True,
 )
 
+# transformer=MLMTransformerEncoder,
 encoder_choices = ClassChoices(
     "encoder",
     classes=dict(
-        transformer=MLMTransformerEncoder,
-        contextual_block_transformer=ContextualBlockTransformerEncoder,
-        vgg_rnn=VGGRNNEncoder,
-        rnn=RNNEncoder,
-        wav2vec2=FairSeqWav2Vec2Encoder,
-        hubert=FairseqHubertEncoder,
-        hubert_pretrain=FairseqHubertPretrainEncoder,
+        transformer=TransformerEncoder,
+        conformer=ConformerEncoder,
     ),
-    type_check=AbsEncoder,
     default="transformer",
 )
 
@@ -109,8 +83,9 @@ decoder_choices = ClassChoices(
     "decoder",
     classes=dict(
         transformer=TransformerDecoder,
-        transformer_encoder=TransformerEncoder,
-        no_decoder=TransformerDecoder
+        transformer_encoder=TransformerDecoder,
+        no_decoder=TransformerDecoder,
+        conformer=ConformerDecoder
     ),
     default="transformer",
 )
@@ -186,12 +161,6 @@ class MLMTask(AbsTask):
             type=int_or_none,
             default=None,
             help="The number of dimension of output feature",
-        )
-        group.add_argument(
-            "--ctc_conf",
-            action=NestedDictAction,
-            default=get_default_kwargs(CTC),
-            help="The keyword arguments for CTC class.",
         )
         group.add_argument(
             "--model_conf",
@@ -288,19 +257,36 @@ class MLMTask(AbsTask):
 
     @classmethod
     def build_collate_fn(
-        cls, args: argparse.Namespace, train: bool
+        cls, args: argparse.Namespace, train: bool, epoch=-1
     ) -> Callable[
         [Collection[Tuple[str, Dict[str, np.ndarray]]]],
         Tuple[List[str], Dict[str, torch.Tensor]],
     ]:
-        assert check_argument_types()
-        return CommonCollateFn(float_pad_value=0.0, int_pad_value=0)
+        # assert check_argument_types()
+        # return CommonCollateFn(float_pad_value=0.0, int_pad_value=0)
+        feats_extract_class = feats_extractor_choices.get_class(args.feats_extract)
+        feats_extract = feats_extract_class(**args.feats_extract_conf)
+
+        sega_emb = True if args.encoder_conf['input_layer'] == 'sega_mlm' else False
+        if args.encoder_conf['selfattention_layer_type'] == 'longformer':
+            attention_window = args.encoder_conf['attention_window']
+            pad_speech = True if 'pre_speech_layer' in args.encoder_conf and args.encoder_conf['pre_speech_layer'] >0 else False
+        else:
+            attention_window=0
+            pad_speech=False
+        if epoch==-1:
+            mlm_prob_factor = 1
+        else:
+            mlm_probs = [1.0, 1.0, 0.7, 0.6, 0.5]
+            mlm_prob_factor = mlm_probs[epoch // 100]
+        return MLMCollateFn(feats_extract, float_pad_value=0.0, int_pad_value=0,
+        mlm_prob=args.model_conf['mlm_prob']*mlm_prob_factor,mean_phn_span=args.model_conf['mean_phn_span'],attention_window=attention_window,pad_speech=pad_speech,sega_emb=sega_emb)
 
     @classmethod
     def build_preprocess_fn(
         cls, args: argparse.Namespace, train: bool
     ) -> Optional[Callable[[str, Dict[str, np.array]], Dict[str, np.ndarray]]]:
-        assert check_argument_types()
+        # assert check_argument_types()
         if args.use_preprocessor:
             retval = CommonPreprocessor(
                 train=train,
@@ -313,7 +299,7 @@ class MLMTask(AbsTask):
             )
         else:
             retval = None
-        assert check_return_type(retval)
+        # assert check_return_type(retval)
         return retval
 
     @classmethod
@@ -328,12 +314,12 @@ class MLMTask(AbsTask):
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
         retval = ()
-        assert check_return_type(retval)
+        # assert check_return_type(retval)
         return retval
 
     @classmethod
     def build_model(cls, args: argparse.Namespace) -> ESPnetMLMModel:
-        assert check_argument_types()
+        # assert check_argument_types()
         if isinstance(args.token_list, str):
             with open(args.token_list, encoding="utf-8") as f:
                 token_list = [line.rstrip() for line in f]
@@ -368,29 +354,46 @@ class MLMTask(AbsTask):
             normalize = None
 
         pos_enc_class = ScaledPositionalEncoding if args.use_scaled_pos_enc else PositionalEncoding
+
+        if "conformer" in [args.encoder, args.decoder]:
+            conformer_self_attn_layer_type = args.encoder_conf['selfattention_layer_type']
+            conformer_pos_enc_layer_type = args.encoder_conf['pos_enc_layer_type']
+            conformer_rel_pos_type = "legacy"
+            if conformer_rel_pos_type == "legacy":
+                if conformer_pos_enc_layer_type == "rel_pos":
+                    conformer_pos_enc_layer_type = "legacy_rel_pos"
+                    logging.warning(
+                        "Fallback to conformer_pos_enc_layer_type = 'legacy_rel_pos' "
+                        "due to the compatibility. If you want to use the new one, "
+                        "please use conformer_pos_enc_layer_type = 'latest'."
+                    )
+                if conformer_self_attn_layer_type == "rel_selfattn":
+                    conformer_self_attn_layer_type = "legacy_rel_selfattn"
+                    logging.warning(
+                        "Fallback to "
+                        "conformer_self_attn_layer_type = 'legacy_rel_selfattn' "
+                        "due to the compatibility. If you want to use the new one, "
+                        "please use conformer_pos_enc_layer_type = 'latest'."
+                    )
+            elif conformer_rel_pos_type == "latest":
+                assert conformer_pos_enc_layer_type != "legacy_rel_pos"
+                assert conformer_self_attn_layer_type != "legacy_rel_selfattn"
+            else:
+                raise ValueError(f"Unknown rel_pos_type: {conformer_rel_pos_type}")
+            args.encoder_conf['selfattention_layer_type'] = conformer_self_attn_layer_type
+            args.encoder_conf['pos_enc_layer_type'] = conformer_pos_enc_layer_type 
+            args.decoder_conf['selfattention_layer_type'] = conformer_self_attn_layer_type
+            args.decoder_conf['pos_enc_layer_type'] = conformer_pos_enc_layer_type 
+
+
         # 4. Encoder
         encoder_class = encoder_choices.get_class(args.encoder)
         
-        encoder = encoder_class(vocab_size=vocab_size,input_size=args.input_size, pos_enc_class=pos_enc_class,
+        encoder = encoder_class(args.input_size,vocab_size=vocab_size, pos_enc_class=pos_enc_class,
         **args.encoder_conf)
-        encoder_output_size = encoder.output_size()
 
         # # 5. Decoder
-        if args.decoder != 'no_decoder' and 'encoder' not in args.decoder:
-            decoder_class = decoder_choices.get_class(args.decoder)
-            decoder_input_layer = torch.nn.Sequential(
-                    DecoderPrenet(
-                        idim=odim,
-                        **args.pre_decoder_conf
-                    ),
-                    torch.nn.Linear(256, encoder.output_size()),
-                )
-            decoder = decoder_class(
-                odim=odim,
-                input_layer=decoder_input_layer,
-                **args.decoder_conf,
-            )
-        elif 'encoder' in args.decoder:
+        if args.decoder != 'no_decoder':
             decoder_class = decoder_choices.get_class(args.decoder)
             decoder = decoder_class(
                 idim=0,
@@ -399,50 +402,75 @@ class MLMTask(AbsTask):
             )
         else:
             decoder = None
-        # 6. CTC
-        ctc = CTC(
-            odim=vocab_size, encoder_output_sizse=encoder_output_size, **args.ctc_conf
-        )
-
 
         # 8. Build model
-        if decoder is not None and 'encoder' not in args.decoder:
-            model = ESPnetMLMDecoderModel(
-                feats_extract=feats_extract,
-                odim=odim,
-                normalize=normalize,
-                encoder=encoder,
-                decoder=decoder,
-                ctc=ctc,
-                token_list=token_list,
-                **args.model_conf,
-            )
-        if 'encoder' in args.decoder:
-            model = ESPnetMLMEncAsDecoderModel(
-                feats_extract=feats_extract,
-                odim=odim,
-                normalize=normalize,
-                encoder=encoder,
-                decoder=decoder,
-                ctc=ctc,
-                token_list=token_list,
-                **args.model_conf,
-            )
-        else:
-            model = ESPnetMLMModel(
-                feats_extract=feats_extract,
-                odim=odim,
-                normalize=normalize,
-                encoder=encoder,
-                decoder=decoder,
-                ctc=ctc,
-                token_list=token_list,
-                **args.model_conf,
-            )
+        model = ESPnetMLMEncAsDecoderModel(
+            feats_extract=feats_extract,
+            odim=odim,
+            normalize=normalize,
+            encoder=encoder,
+            decoder=decoder,
+            token_list=token_list,
+            **args.model_conf,
+        )
+
 
         # 9. Initialize
         if args.init is not None:
             initialize(model, args.init)
 
-        assert check_return_type(model)
+        # assert check_return_type(model)
         return model
+
+
+    @classmethod
+    def build_model_from_file(
+        cls,
+        config_file: Union[Path, str] = None,
+        model_file: Union[Path, str] = None,
+        device: str = "cpu",
+    ) -> Tuple[AbsESPnetModel, argparse.Namespace]:
+        """Build model from the files.
+
+        This method is used for inference or fine-tuning.
+
+        Args:
+            config_file: The yaml file saved when training.
+            model_file: The model file saved when training.
+            device: Device type, "cpu", "cuda", or "cuda:N".
+
+        """
+        # assert check_argument_types()
+        if config_file is None:
+            assert model_file is not None, (
+                "The argument 'model_file' must be provided "
+                "if the argument 'config_file' is not specified."
+            )
+            config_file = Path(model_file).parent / "config.yaml"
+        else:
+            config_file = Path(config_file)
+
+        with config_file.open("r", encoding="utf-8") as f:
+            args = yaml.safe_load(f)
+        if 'ctc_weight' in args['model_conf'].keys():
+            args['model_conf'].pop('ctc_weight')
+        args = argparse.Namespace(**args)
+        model = cls.build_model(args)
+        if not isinstance(model, ESPnetMLMModel):
+            raise RuntimeError(
+                f"model must inherit {ESPnetMLMModel.__name__}, but got {type(model)}"
+            )
+        model.to(device)
+        if model_file is not None:
+            if device == "cuda":
+                # NOTE(kamo): "cuda" for torch.load always indicates cuda:0
+                #   in PyTorch<=1.4
+                device = f"cuda:{torch.cuda.current_device()}"
+            state_dict = torch.load(model_file, map_location=device)
+            keys = list(state_dict.keys())
+            for k in keys:
+                if "encoder.embed" in k:
+                    state_dict[k.replace("encoder.embed","encoder.speech_embed")] = state_dict.pop(k)
+            model.load_state_dict(state_dict)
+
+        return model, args

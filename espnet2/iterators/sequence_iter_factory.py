@@ -62,7 +62,7 @@ class SequenceIterFactory(AbsIterFactory):
         # https://discuss.pytorch.org/t/what-is-the-disadvantage-of-using-pin-memory/1702
         self.pin_memory = pin_memory
 
-    def build_iter(self, epoch: int, shuffle: bool = None) -> DataLoader:
+    def build_iter(self, epoch: int, shuffle: bool = None, collate_fn=None) -> DataLoader:
         if shuffle is None:
             shuffle = self.shuffle
 
@@ -129,8 +129,10 @@ class SequenceIterFactory(AbsIterFactory):
                 np.random.RandomState(epoch + self.seed).shuffle(batches)
 
         # For backward compatibility for pytorch DataLoader
-        if self.collate_fn is not None:
+        if self.collate_fn is not None and collate_fn is None:
             kwargs = dict(collate_fn=self.collate_fn)
+        elif collate_fn is not None:
+            kwargs = dict(collate_fn=collate_fn)
         else:
             kwargs = {}
 

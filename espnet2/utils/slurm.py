@@ -114,4 +114,4 @@ def restart_command():
     time_limit = parse_time(time_limit_string)
     runtime = parse_time(info["RunTime"])
     end_time = time.time() + time_limit - runtime
-    return command, end_time
+    return command, end_time, info["JobId"]
