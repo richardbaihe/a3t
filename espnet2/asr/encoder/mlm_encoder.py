@@ -54,6 +54,21 @@ class MaskInputLayer(Module):
         masked_input = input.masked_fill(masked_position, 0) + self.mask_feature.unsqueeze(0).unsqueeze(0).expand_as(input).masked_fill(~masked_position, 0)
         return masked_input
 
+class NewMaskInputLayer(Module):
+    __constants__ = ['out_features']
+    out_features: int
+
+    def __init__(self, out_features: int,
+                 device=None, dtype=None) -> None:
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super(NewMaskInputLayer, self).__init__()
+        self.mask_feature = torch.nn.Parameter(torch.empty((1,1,out_features)).normal_())
+
+    def forward(self, input: torch.Tensor, masked_position=None) -> torch.Tensor:
+        masked_position = masked_position.unsqueeze(-1).expand_as(input)
+        masked_input = input.masked_fill(masked_position, 0) + self.mask_feature.expand_as(input).masked_fill(~masked_position, 0)
+        return masked_input
+
 
 class MLMTransformerEncoder(AbsEncoder):
     """Transformer encoder module.
