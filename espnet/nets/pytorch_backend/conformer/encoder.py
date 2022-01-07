@@ -384,6 +384,7 @@ class MLMEncoder(torch.nn.Module):
                 pos_enc_class(attention_dim, positional_dropout_rate),
             )
         elif input_layer == "mlm":
+            self.segment_emb = None
             self.speech_embed = mySequential(
                 NewMaskInputLayer(idim),
                 torch.nn.Linear(idim, attention_dim),
@@ -527,7 +528,7 @@ class MLMEncoder(torch.nn.Module):
         else:
             speech_pad = self.speech_embed(speech_pad)
         text_pad = self.text_embed(text_pad)
-        if speech_segment_pos is not None and text_segment_pos is not None:
+        if speech_segment_pos is not None and text_segment_pos is not None and self.segment_emb:
             speech_segment_emb = self.segment_emb(speech_segment_pos)
             text_segment_emb = self.segment_emb(text_segment_pos)
             text_pad = (text_pad[0] + text_segment_emb, text_pad[1])

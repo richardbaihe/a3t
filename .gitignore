@@ -84,3 +84,4 @@ output/
 *.npy
 TextGrid/
 hifigan/*.pth.tar
+aggregate_output/*

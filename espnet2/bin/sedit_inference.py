@@ -19,6 +19,12 @@ from espnet2.bin.align_english import alignment
 import librosa
 import random
 
+duration_path_dict = {
+    "ljspeech":"/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "vctk": "/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "libritts":"/mnt/home/v_baihe/projects/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+}
+
 torch.use_deterministic_algorithms(True)
 torch.manual_seed(0)
 random.seed(0)
@@ -175,22 +181,45 @@ def get_fs2_model(model_name):
     processor = TTSTask.build_preprocess_fn(config, train=False)
     # model = torch.load('/mnt/home/v_baihe/projects/espnet/egs2/{}/tts1/exp/fs2_model.pt'.format(model_name))
     # processor = torch.load('/mnt/home/v_baihe/projects/espnet/egs2/{}/tts1/exp/fs2_processor.pt'.format(model_name))
-    return model.tts, processor
+    return model, processor
 
-def duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor):
-    phns = [i if i != 'sp' else '<space>' for i in old_phns ]
-    text = fs2_processor.token_id_converter.tokens2ids(phns)+[fs2_model.eos]
+def duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor,wav_org):
+    phns = [i if i != 'sp' else '<blank>' for i in old_phns ]
+    text = fs2_processor.token_id_converter.tokens2ids(phns)
     text = torch.tensor(text).unsqueeze(0)
     ilens = torch.tensor(text.shape[1]).unsqueeze(0)
-    x_masks = fs2_model._source_mask(ilens)
-    hs, _ = fs2_model.encoder(text, x_masks)
+    x_masks = fs2_model.tts._source_mask(ilens)
+    hs, _ = fs2_model.tts.encoder(text, x_masks)
+    if fs2_model.tts.use_gst:
+        origin_speech = torch.tensor(np.array(wav_org,dtype=np.float32)).unsqueeze(0)
+        speech_lengths = torch.tensor(len(wav_org)).unsqueeze(0)
+        ys,_ = fs2_model.feats_extract(origin_speech, speech_lengths )
+        style_embs = fs2_model.tts.gst(ys)
+        hs = hs + style_embs.unsqueeze(1)
     d_masks = make_pad_mask(ilens).to(text.device)
-    d_outs = fs2_model.duration_predictor.inference(hs, d_masks)+1  # (B, T_text)
+    d_outs = fs2_model.tts.duration_predictor.inference(hs, d_masks)  # (B, T_text)
     d_outs = d_outs*hop_length/fs
-    return d_outs[0].tolist()[:-1]
+    return d_outs[0].tolist()
 
-def duration_adjust_factor(original_dur, pred_dur):
-    return sum([ori/pred for ori,pred in zip(original_dur, pred_dur)])/len(original_dur)
+def duration_adjust_factor(original_dur, pred_dur, phns):
+    length = 0
+    accumulate = 0
+    factor_list = []
+    for ori,pred,phn in zip(original_dur, pred_dur,phns):
+        if pred==0 or phn=='sp':
+            continue
+        else:
+            # accumulate += ori/pred
+            # length+=1
+            factor_list.append(ori/pred)
+    factor_list = np.array(factor_list)
+    factor_list.sort()
+    if len(factor_list)<4:
+        return 1
+    # length = int(len(factor_list)*0.9)
+    length = 2
+    return np.average(factor_list[length:-length])
+    # return accumulate/length
 
 def get_masked_mel_boundary(mfa_start, mfa_end, fs, hop_length, span_tobe_replaced):
     align_start=torch.tensor(mfa_start).unsqueeze(0)
@@ -261,17 +290,16 @@ def prepare_features_with_duration(mlm_model, old_str, new_str, wav_path,duratio
 
     mfa_start, mfa_end, old_phns, new_phns, span_tobe_replaced, span_tobe_added = get_phns_and_spans(wav_path, old_str, new_str)
 
-    ## TODO: deletion
     if '[MASK]' in new_str:
         old_span_boundary = get_masked_mel_boundary(mfa_start, mfa_end, fs, hop_length, span_tobe_replaced)
         return wav_org, old_phns, mfa_start, mfa_end, old_span_boundary, old_span_boundary
     # 2. get new alignment start and end list
     fs2_model, fs2_processor = get_fs2_model(duration_preditor_path)
-    old_durations = duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor )
-    new_durations = duration_predict(new_phns, fs, hop_length,fs2_model, fs2_processor )
+    old_durations = duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor,wav_org )
+    new_durations = duration_predict(new_phns, fs, hop_length,fs2_model, fs2_processor,wav_org )
     original_old_durations = [e-s for e,s in zip(mfa_end, mfa_start)]
-    d_factor = duration_adjust_factor(original_old_durations,old_durations)
-    # old_durations_adjusted = [d_factor*i for i in old_durations]
+    d_factor = duration_adjust_factor(original_old_durations,old_durations, old_phns)
+    # d_factor = 2
     new_durations_adjusted = [d_factor*i for i in new_durations]
     
     new_span_duration_sum = sum(new_durations_adjusted[span_tobe_added[0]:span_tobe_added[1]])
@@ -312,12 +340,8 @@ def prepare_features(mlm_model,processor, wav_path, old_str,new_str,duration_pre
     
     return batch, speech_lengths, old_span_boundary,new_span_boundary
 
-def get_mlm_output(model_name, wav_path, old_str, new_str,duration_preditor_path, decoder=False,use_teacher_forcing=False):
-
-    mlm_model,train_args = load_model(model_name)
-    mlm_model.eval()
-    processor = MLMTask.build_preprocess_fn(train_args, False)
-    collate_fn = MLMTask.build_collate_fn(train_args, False)
+def decode_with_model(mlm_model, processor, collate_fn, wav_path, old_str, new_str,duration_preditor_path, decoder=False,use_teacher_forcing=False):
+    fs, hop_length = mlm_model.feats_extract.fs, mlm_model.feats_extract.hop_length
 
     batch,speech_lengths,old_span_boundary,new_span_boundary = prepare_features(mlm_model,processor,wav_path,old_str,new_str,duration_preditor_path)
     feats = collate_fn(batch)[1]
@@ -340,7 +364,16 @@ def get_mlm_output(model_name, wav_path, old_str, new_str,duration_preditor_path
     origin_speech = torch.tensor(np.array(wav_org,dtype=np.float32)).unsqueeze(0)
     speech_lengths = torch.tensor(len(wav_org)).unsqueeze(0)
     input_feat, feats_lengths = mlm_model.feats_extract(origin_speech, speech_lengths)
-    return wav_org, input_feat.squeeze(), output_feat, old_span_boundary, new_span_boundary
+    return wav_org, input_feat.squeeze(), output_feat, old_span_boundary, new_span_boundary, fs, hop_length
+
+def get_mlm_output(model_name, wav_path, old_str, new_str,duration_preditor_path, decoder=False,use_teacher_forcing=False):
+
+    mlm_model,train_args = load_model(model_name)
+    mlm_model.eval()
+    processor = MLMTask.build_preprocess_fn(train_args, False)
+    collate_fn = MLMTask.build_collate_fn(train_args, False)
+
+    return decode_with_model(mlm_model, processor, collate_fn, wav_path, old_str, new_str,duration_preditor_path,decoder, use_teacher_forcing)
 
 def plot_data(data, figsize=(16, 4), span_boundary=None, titles=None):
     fig, axes = plt.subplots(1, len(data), figsize=figsize)
@@ -354,7 +387,7 @@ def plot_data(data, figsize=(16, 4), span_boundary=None, titles=None):
             axes[i].title.set_text(titles[i])
 
 def plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str, vocoder,duration_preditor_path, non_autoreg=True):
-    wav_org, input_feat, output_feat, old_span_boundary, new_span_boundary = get_mlm_output(
+    wav_org, input_feat, output_feat, old_span_boundary, new_span_boundary, fs, hop_length = get_mlm_output(
                                                             model_name,
                                                             wav_path,
                                                             old_str,
@@ -367,12 +400,16 @@ def plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_s
               output_feat.float().data.cpu().numpy().T),
               span_boundary=[old_span_boundary,new_span_boundary],
              titles=['original spec', 'new spec'])
+    replaced_wav = vocoder(output_feat).detach().float().data.cpu().numpy()
+    # vocoder_origin_wav = vocoder(input_feat).detach().float().data.cpu().numpy()
 
-    replaced_wav = vocoder(output_feat)
-    vocoder_origin_wav = vocoder(input_feat)
-    data_dict = {"prediction":replaced_wav.detach().float().data.cpu().numpy(), 
-             "origin_vocoder":vocoder_origin_wav.detach().float().data.cpu().numpy(), 
-             "origin":wav_org}
+    old_time_boundary = [hop_length * x  for x in old_span_boundary]
+    new_time_boundary = [hop_length * x  for x in new_span_boundary]
+    wav_org_replaced = np.concatenate([wav_org[:old_time_boundary[0]], replaced_wav[new_time_boundary[0]:new_time_boundary[1]], wav_org[old_time_boundary[1]:]])
+    # "origin_vocoder":vocoder_origin_wav, 
+    data_dict = {"prediction":replaced_wav, 
+                "orgin_replaced":wav_org_replaced,
+                "origin":wav_org}
     return data_dict
 
 def read_emotion_data(speaker_id, text_tag, emo_tag, level_tag):
@@ -411,7 +448,7 @@ def read_emotion_data(speaker_id, text_tag, emo_tag, level_tag):
     
 def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="conformer",old_str="", new_str=""):
     # uid = "1272_128104_000003_000001"
-    duration_preditor_path= "/mnt/home/v_baihe/projects/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    duration_preditor_path= duration_path_dict['libritts']
     full_origin_str,wav_path = read_data(uid, prefix)
     print(full_origin_str)
     if not old_str:
@@ -422,7 +459,7 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
     return results_dict
 
 def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str=""):
-    duration_preditor_path = "/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    duration_preditor_path = duration_path_dict['ljspeech']
     full_origin_str,wav_path = read_data(uid, prefix)
     print(full_origin_str)
     if not old_str:
@@ -433,7 +470,7 @@ def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_s
     return results_dict
 
 def test_ljspeech(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str=""):
-    duration_preditor_path = "/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    duration_preditor_path = duration_path_dict['ljspeech']
     full_origin_str,wav_path = read_data(uid, prefix)
     print(full_origin_str)
     if not old_str:
@@ -444,7 +481,7 @@ def test_ljspeech(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", o
     return results_dict
 
 def test_cremad(uid, vocoder, model_name="conformer", old_str="", new_str=""):
-    duration_preditor_path = "/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    duration_preditor_path = duration_path_dict['ljspeech']
     speaker_id, text_tag,emo_tag,level_tag=uid.split("_")
     full_origin_str,wav_path = read_emotion_data(speaker_id, text_tag, emo_tag, level_tag)
     print(full_origin_str)
@@ -454,6 +491,15 @@ def test_cremad(uid, vocoder, model_name="conformer", old_str="", new_str=""):
         new_str = input("input the new string:")
     results_dict = plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path)
     return results_dict
+
+
+def decode_vctk(mlm_model, processor, collate_fn, uid, vocoder, prefix='dump/raw/dev',old_str="",new_str=""):
+    # mlm_model,train_args = load_model(model_name)
+    # mlm_model.eval()
+    # processor = MLMTask.build_preprocess_fn(train_args, False)
+    # collate_fn = MLMTask.build_collate_fn(train_args, False)
+
+    return decode_with_model(mlm_model, processor, collate_fn, wav_path, old_str, new_str,duration_preditor_path,decoder, use_teacher_forcing)
 
 
 if __name__ == "__main__":
@@ -471,8 +517,9 @@ if __name__ == "__main__":
     # data_dict = test_ljspeech(uid,vocoder, prefix, model_name, new_str=new_str)
 
     vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/old/conformer"
-    uid = "p226_362"
-    prefix='/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/dump/raw/eval1/'
-    new_str = "[MASK]"
+    model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
+    uid = "p243_313"
+    # prefix='/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/dump/raw/tr_no_dev/'
+    prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/tr_no_dev/'
+    new_str = "for that theoretical and realistic reason cover should not be given"
     data_dict = test_vctk(uid,vocoder,prefix,model_name,new_str=new_str)
