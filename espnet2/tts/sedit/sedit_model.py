@@ -32,6 +32,11 @@ from espnet2.tts.feats_extract.abs_feats_extract import AbsFeatsExtract
 from espnet.nets.pytorch_backend.tacotron2.decoder import Postnet
 from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttention, LongformerAttention
 from espnet2.train.collate_fn import phones_masking, get_segment_pos,pad_to_longformer_att_window
+from espnet.nets.pytorch_backend.fastspeech.duration_predictor import DurationPredictor, DurationPredictorLoss
+from espnet.nets.pytorch_backend.fastspeech.length_regulator import LengthRegulator
+
+
+
 if LooseVersion(torch.__version__) >= LooseVersion("1.6.0"):
     from torch.cuda.amp import autocast
 else:
@@ -62,6 +67,7 @@ class ESPnetMLMModel(AbsESPnetModel):
         mean_phn_span: int = 3,
         mlm_prob: float = 0.25,
         dynamic_mlm_prob = False,
+        decoder_seg_pos=False,
     ):
 
         super().__init__()
@@ -95,7 +101,11 @@ class ESPnetMLMModel(AbsESPnetModel):
             self.sfc = torch.nn.Linear(self.encoder._output_size, odim)
         else:
             self.sfc=None
-        self.l1_loss_func = torch.nn.L1Loss(reduce=False)
+        self.decoder_seg_pos = decoder_seg_pos
+        if lsm_weight > 50:
+            self.l1_loss_func = torch.nn.MSELoss(reduce=False)
+        else:
+            self.l1_loss_func = torch.nn.L1Loss(reduce=False)
         # self.l2_loss_func = torch.nn.MSELoss(reduce=False)
         # self.loss_func = torch.nn.MSELoss(reduce=False)
         self.postnet = (
@@ -113,35 +123,11 @@ class ESPnetMLMModel(AbsESPnetModel):
         )
 
     def collect_feats(self,
-        speech, speech_lengths, text, text_lengths, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks
+        speech, speech_lengths, text, text_lengths, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks=None
     ) -> Dict[str, torch.Tensor]:
         return {"feats": speech, "feats_lengths": speech_lengths}
 
-    # def collect_feats(
-    #     self,
-    #     speech: torch.Tensor, 
-    #     speech_lengths: torch.Tensor,
-    #     text: torch.Tensor, 
-    #     text_lengths: torch.Tensor,
-    #     align_start: torch.Tensor,
-    #     align_start_lengths: torch.Tensor,
-    #     align_end: torch.Tensor,
-    #     align_end_lengths: torch.Tensor,
-    # ) -> Dict[str, torch.Tensor]:
-    #     if self.feats_extract:
-    #         feats, feats_lengths = self.feats_extract(speech, speech_lengths)
-    #     else:
-    #         # Generate dummy stats if extract_feats_in_collect_stats is False
-    #         logging.warning(
-    #             "Generating dummy stats for feats and feats_lengths, "
-    #             "because encoder_conf.extract_feats_in_collect_stats is "
-    #             f"{self.feats_extract}"
-    #         )
-    #         feats, feats_lengths = speech, speech_lengths
-    #     return {"feats": feats, "feats_lengths": feats_lengths}
-
-
-    def _forward(self, batch, y_masks, speech_segment_pos):
+    def _forward(self, batch, speech_segment_pos,y_masks=None):
         # feats: (Batch, Length, Dim)
         # -> encoder_out: (Batch, Length2, Dim2)
         speech_pad_placeholder = batch['speech_pad']
@@ -166,52 +152,9 @@ class ESPnetMLMModel(AbsESPnetModel):
             after_outs = None
         return before_outs, after_outs, speech_pad_placeholder, batch['masked_position']
 
-    # def forward(
-    #     self,
-    #     speech: torch.Tensor, 
-    #     speech_lengths: torch.Tensor,
-    #     text: torch.Tensor, 
-    #     text_lengths: torch.Tensor,
-    #     align_start: torch.Tensor,
-    #     align_start_lengths: torch.Tensor,
-    #     align_end: torch.Tensor,
-    #     align_end_lengths: torch.Tensor,
-    # ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
-
-    #     speech_pad, text_pad, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks = self.prepare_features(speech, speech_lengths, text, text_lengths, align_start, align_end, align_start_lengths)
-        
-    #     batch_size = speech_pad.shape[0]
-
-    #     batch = dict(
-    #         speech_pad=speech_pad,
-    #         text_pad=text_pad,
-    #         masked_position=masked_position,
-    #         speech_mask=speech_mask,
-    #         text_mask=text_mask,
-    #         speech_segment_pos=speech_segment_pos,
-    #         text_segment_pos=text_segment_pos,
-    #     )
-    #     before_outs, after_outs, xs_pad, masked_position = self._forward(batch, y_masks, speech_segment_pos)
-
-
-    #     loss_mlm, loss_copy = self._calc_mlm_loss(
-    #         before_outs,after_outs, xs_pad, masked_position
-    #     )
-    #     loss = loss_mlm + loss_copy if loss_copy is not None else loss_mlm 
-
-    #     stats = dict(
-    #         loss=loss.detach(),
-    #         loss_mlm=loss_mlm.detach() if loss_mlm is not None else None,
-    #         loss_copy=loss_copy.detach() if loss_copy is not None else None,
-    #     )
-
-    #     # force_gatherable: to-device and to-tensor if scalar for DataParallel
-    #     loss, stats, weight = force_gatherable((loss, stats, batch_size), loss.device)
-    #     return loss, stats, weight
-
     def forward(
         self,
-        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks,speech_lengths=None, text_lengths=None
+        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks=None,speech_lengths=None, text_lengths=None
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
 
         batch_size = speech.shape[0]
@@ -225,7 +168,7 @@ class ESPnetMLMModel(AbsESPnetModel):
             speech_segment_pos=speech_segment_pos,
             text_segment_pos=text_segment_pos,
         )
-        before_outs, after_outs, xs_pad, masked_position = self._forward(batch, y_masks, speech_segment_pos)
+        before_outs, after_outs, xs_pad, masked_position = self._forward(batch, speech_segment_pos,y_masks)
 
 
         loss_mlm, loss_copy = self._calc_mlm_loss(
@@ -295,8 +238,9 @@ class ESPnetMLMModel(AbsESPnetModel):
 
     def inference(
         self,
-        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos, y_masks,
+        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos,
         span_boundary,
+        y_masks=None,
         speech_lengths=None, text_lengths=None,
         feats: Optional[torch.Tensor] = None,
         spembs: Optional[torch.Tensor] = None,
@@ -328,8 +272,10 @@ class ESPnetMLMModel(AbsESPnetModel):
         # ys = self._add_first_frame_and_remove_last_frame(batch['speech_pad'])
         z_cache = None
         if use_teacher_forcing:
-            _,zs, _, _ = self._forward(
-                batch, y_masks, speech_segment_pos)
+            before,zs, _, _ = self._forward(
+                batch, speech_segment_pos, y_masks=y_masks)
+            if zs is None:
+                zs = before
             # if self.sfc is not None:
             #     outputs = self.sfc(zs.reshape(-1, self.encoder._output_size))
             #     zs = outputs.unsqueeze(0)
@@ -393,174 +339,24 @@ class ESPnetMLMModel(AbsESPnetModel):
         loss_copy = None
         return loss_mlm, loss_copy
 
-    # def phones_masking(self, xs_pad, src_mask, align_start, align_end, align_start_lengths, mask_prob, max_span=5, min_span=1, span_boundary=[]):
-    #     assert max_span >= min_span
-    #     bz, sent_len, _ = xs_pad.size()
-    #     mask_num_lower = math.ceil(sent_len * mask_prob)
-    #     masked_position = np.zeros((bz, sent_len))
-    #     y_masks = torch.ones(bz,sent_len,sent_len,device=xs_pad.device,dtype=xs_pad.dtype)
-    #     tril_masks = torch.tril(y_masks)
-    #     for idx in range(bz):
-    #         if len(span_boundary)>0:
-    #             for s,e in zip(span_boundary[::2], span_boundary[1::2]):
-    #                 masked_position[idx, s:e] = 1
-    #                 span_boundary.extend([s,e])
-    #                 y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
-    #                 y_masks[idx, e:, s:e ] = 0
-    #         else:
-    #             length = align_start_lengths[idx].item()
-    #             if length<2:
-    #                 continue
-    #             masked_phn_indices = self.random_spans_noise_mask(length).nonzero()
-    #             masked_start = align_start[idx][masked_phn_indices].tolist()
-    #             masked_end = align_end[idx][masked_phn_indices].tolist()
-    #             for s,e in zip(masked_start, masked_end):
-    #                 masked_position[idx, s:e] = 1
-    #                 y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
-    #                 y_masks[idx, e:, s:e ] = 0
-    #     non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
-    #     # non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
-    #     masked_position = masked_position * non_eos_mask
-    #     y_masks = src_mask & y_masks.bool()
-
-    #     return torch.BoolTensor(masked_position).to(xs_pad.device), y_masks
-
-    def random_masking(self, xs_pad, src_mask, mask_prob):
-        masked_position = np.random.rand(*xs_pad.size()[:2]) < mask_prob
-        # no sos and eos
-        masked_position[:,0] = 0
-        non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
-        non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
-        masked_position = masked_position * non_eos_mask
-        return torch.BoolTensor(masked_position).to(xs_pad.device)
-    
-    def span_masking(self, xs_pad, src_mask, mask_prob, max_span=10, min_span=1):
-        assert max_span >= min_span
-        # xs_pad = xs_pad[:, :-2:2, :][:, :-2:2, :]
-        p = 0.2
-        len_distrib = [p * (1-p) ** (i - min_span) for i in range(min_span, max_span + 1)]
-        len_distrib = [x / (sum(len_distrib)) for x in len_distrib]
-        bz, sent_len, _ = xs_pad.size()
-        mask_num_lower = math.ceil(sent_len * mask_prob)
-        masked_position = np.zeros((bz, sent_len))
-        for idx in range(bz):
-            while np.sum(masked_position[idx]) < mask_num_lower:
-                span_start = np.random.choice(sent_len)
-                span_len = np.random.choice(np.arange(min_span, max_span+1), p=len_distrib)
-                while masked_position[idx, span_start] > 0 or span_start+span_len-1 >= sent_len or masked_position[idx, span_start+span_len-1] > 0:
-                    span_start = np.random.choice(sent_len)
-                    span_len = np.random.choice(np.arange(min_span, max_span+1), p=len_distrib)
-                masked_position[idx, span_start:span_start+span_len] = 1
-        non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
-        # non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
-        masked_position = masked_position * non_eos_mask
-        return torch.BoolTensor(masked_position).to(xs_pad.device)
-    
     def _add_first_frame_and_remove_last_frame(self, ys: torch.Tensor) -> torch.Tensor:
         ys_in = torch.cat(
             [ys.new_zeros((ys.shape[0], 1, ys.shape[2])), ys[:, :-1]], dim=1
         )
         return ys_in
 
-    # def pad_to_longformer_att_window(self, text, max_len, max_tlen):
-    #     round = max_len % self.encoder.attention_window
-    #     if round != 0:
-    #         max_tlen += (self.encoder.attention_window - round)
-    #         n_batch = text.shape[0]
-    #         text_pad = text.new_zeros(n_batch, max_tlen, *text[0].size()[1:])
-    #         for i in range(n_batch):
-    #             text_pad[i, : text[i].size(0)] = text[i]
-    #     else:
-    #         text_pad = text[:, : max_tlen]
-    #     return text_pad, max_tlen
-
-    # def get_segment_pos(self, speech_pad, text_pad, align_start, align_end, align_start_lengths):
-    #     bz, speech_len, _ = speech_pad.size()
-    #     text_segment_pos = torch.zeros_like(text_pad)
-    #     speech_segment_pos = torch.zeros((bz, speech_len),dtype=text_pad.dtype, device=text_pad.device)
-    #     for idx in range(bz):
-    #         align_length = align_start_lengths[idx].item()
-    #         for j in range(align_length):
-    #             s,e = align_start[idx][j].item(), align_end[idx][j].item()
-    #             speech_segment_pos[idx][s:e] = j+1
-    #             text_segment_pos[idx][j] = j+1
-            
-    #     return speech_segment_pos, text_segment_pos
-
-    def random_spans_noise_mask(self, length):
-
-        """This function is copy of `random_spans_helper <https://github.com/google-research/text-to-text-transfer-transformer/blob/84f8bcc14b5f2c03de51bd3587609ba8f6bbd1cd/t5/data/preprocessors.py#L2682>`__ .
-        Noise mask consisting of random spans of noise tokens.
-        The number of noise tokens and the number of noise spans and non-noise spans
-        are determined deterministically as follows:
-        num_noise_tokens = round(length * noise_density)
-        num_nonnoise_spans = num_noise_spans = round(num_noise_tokens / mean_noise_span_length)
-        Spans alternate between non-noise and noise, beginning with non-noise.
-        Subject to the above restrictions, all masks are equally likely.
-        Args:
-            length: an int32 scalar (length of the incoming token sequence)
-            noise_density: a float - approximate density of output mask
-            mean_noise_span_length: a number
-        Returns:
-            a boolean tensor with shape [length]
-        """
-
-        orig_length = length
-
-        num_noise_tokens = int(np.round(length * self.mlm_prob))
-        # avoid degeneracy by ensuring positive numbers of noise and nonnoise tokens.
-        num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
-        num_noise_spans = int(np.round(num_noise_tokens / self.mean_phn_span))
-
-        # avoid degeneracy by ensuring positive number of noise spans
-        num_noise_spans = max(num_noise_spans, 1)
-        num_nonnoise_tokens = length - num_noise_tokens
-
-        # pick the lengths of the noise spans and the non-noise spans
-        def _random_segmentation(num_items, num_segments):
-            """Partition a sequence of items randomly into non-empty segments.
-            Args:
-                num_items: an integer scalar > 0
-                num_segments: an integer scalar in [1, num_items]
-            Returns:
-                a Tensor with shape [num_segments] containing positive integers that add
-                up to num_items
-            """
-            mask_indices = np.arange(num_items - 1) < (num_segments - 1)
-            np.random.shuffle(mask_indices)
-            first_in_segment = np.pad(mask_indices, [[1, 0]])
-            segment_id = np.cumsum(first_in_segment)
-            # count length of sub segments assuming that list is sorted
-            _, segment_length = np.unique(segment_id, return_counts=True)
-            return segment_length
-
-        noise_span_lengths = _random_segmentation(num_noise_tokens, num_noise_spans)
-        nonnoise_span_lengths = _random_segmentation(num_nonnoise_tokens, num_noise_spans)
-
-        interleaved_span_lengths = np.reshape(
-            np.stack([nonnoise_span_lengths, noise_span_lengths], axis=1), [num_noise_spans * 2]
-        )
-        span_starts = np.cumsum(interleaved_span_lengths)[:-1]
-        span_start_indicator = np.zeros((length,), dtype=np.int8)
-        span_start_indicator[span_starts] = True
-        span_num = np.cumsum(span_start_indicator)
-        is_noise = np.equal(span_num % 2, 1)
-
-        return is_noise[:orig_length]
-
-class ESPnetMLMDecoderModel(ESPnetMLMModel):
-    def nothing(self):
-        return 0
-
 class ESPnetMLMEncAsDecoderModel(ESPnetMLMModel):
 
-    def _forward(self, batch, y_masks, speech_segment_pos):
+    def _forward(self, batch, speech_segment_pos, y_masks=None):
         # feats: (Batch, Length, Dim)
         # -> encoder_out: (Batch, Length2, Dim2)
         speech_pad_placeholder = batch['speech_pad']
         # ys_in = self._add_first_frame_and_remove_last_frame(batch['speech_pad'])
-        encoder_out, h_masks = self.encoder(**batch)
+        encoder_out, h_masks = self.encoder(**batch) # segment_emb
         if self.decoder is not None:
+            # if self.decoder_seg_pos:
+            #     zs, _ = self.decoder(encoder_out, h_masks.bool(),segment_emb)
+            # else:
             zs, _ = self.decoder(encoder_out, h_masks.bool())
         else:
             zs = encoder_out
@@ -577,3 +373,186 @@ class ESPnetMLMEncAsDecoderModel(ESPnetMLMModel):
         else:
             after_outs = None
         return before_outs, after_outs, speech_pad_placeholder, batch['masked_position']
+
+class ESPnetMLMTTSModel(ESPnetMLMModel):
+    def __init__(
+        self,
+        token_list: Union[Tuple[str, ...], List[str]],
+        odim: int,
+        feats_extract: Optional[AbsFeatsExtract],
+        normalize: Optional[AbsNormalize],
+        encoder: torch.nn.Module,
+        decoder: Optional[torch.nn.Module],
+        postnet_layers: int = 0,
+        postnet_chans: int = 0,
+        postnet_filts: int = 0,
+        ignore_id: int = -1,
+        lsm_weight: float = 0.0,
+        length_normalized_loss: bool = False,
+        report_cer: bool = True,
+        report_wer: bool = True,
+        sym_space: str = "<space>",
+        sym_blank: str = "<blank>",
+        masking_schema: str = "span",
+        mean_phn_span: int = 3,
+        mlm_prob: float = 0.25,
+        dynamic_mlm_prob = False,
+        duration_predictor_layers = 0,
+    ):
+        super().__init__(token_list, odim, feats_extract, normalize, encoder, decoder, postnet_layers, postnet_chans, postnet_filts, ignore_id, lsm_weight, length_normalized_loss, report_cer, report_wer, sym_space, sym_blank, masking_schema, mean_phn_span, mlm_prob, dynamic_mlm_prob)
+        adim = self.encoder._output_size
+        self.duration_predictor = DurationPredictor(
+            idim=adim,
+            n_layers=duration_predictor_layers,
+            n_chans=256,
+            kernel_size=3,
+            dropout_rate=0.1,
+        )
+        self.length_regulator = LengthRegulator()
+        self.duration_criterion = DurationPredictorLoss(reduction="none")
+
+        
+    def _forward(self, batch,durations=None, is_inference=False, alpha=1.0):
+        # feats: (Batch, Length, Dim)
+        # -> encoder_out: (Batch, Length2, Dim2)
+        #speech_pad_placeholder = batch['full_speech_pad']
+        encoder_out, h_masks, segment_emb = self.encoder(**batch)
+        speech_hidden_states = encoder_out[:,:batch['speech_pad'].shape[1],:].contiguous()
+        if is_inference:
+            d_outs = self.duration_predictor.inference(speech_hidden_states, batch['speech_mask'].squeeze(1))
+            d_outs[d_outs.sum(dim=1).eq(0)] = 1
+            d_outs_pad_text = torch.cat([d_outs,torch.ones_like(batch['text_pad'],dtype=d_outs.dtype)],axis=1)
+            encoder_out = self.length_regulator(encoder_out, d_outs_pad_text, alpha)
+            h_masks = self.length_regulator(h_masks.unsqueeze(-1), d_outs_pad_text, alpha).squeeze(-1)
+        else:
+            d_outs = self.duration_predictor(speech_hidden_states, batch['speech_mask'].squeeze(1))
+            durations_pad_text = torch.cat([durations,torch.ones_like(batch['text_pad'])],axis=1)
+            encoder_out = self.length_regulator(encoder_out, durations_pad_text)
+            h_masks = self.length_regulator(h_masks.squeeze(1).unsqueeze(-1), durations_pad_text).squeeze(-1).unsqueeze(1)
+
+        if self.decoder is not None:
+            if self.decoder_seg_pos:
+                zs, _ = self.decoder(encoder_out, h_masks.bool(),segment_emb)
+            else:
+                zs, _ = self.decoder(encoder_out, h_masks.bool())
+        else:
+            zs = encoder_out
+        speech_hidden_states = zs[:,:-batch['text_pad'].shape[1], :].contiguous()
+        if self.sfc is not None:
+            before_outs = self.sfc(speech_hidden_states).view(
+            speech_hidden_states.size(0), -1, self.odim)
+        else:
+            before_outs = speech_hidden_states
+        if self.postnet is not None:
+            after_outs = before_outs + self.postnet(
+                before_outs.transpose(1, 2)
+            ).transpose(1, 2)
+        else:
+            after_outs = None
+        return before_outs, after_outs, d_outs #, speech_pad_placeholder, batch['masked_position']
+
+    def forward(
+        self,
+        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos,durations, reordered_index, y_masks=None,speech_lengths=None, text_lengths=None
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
+
+        batch_size = speech.shape[0]
+        max_reduced_length = reordered_index.shape[1]
+
+        reduced_masked_position = masked_position[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length)
+
+        reduced_speech = speech[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length,-1)
+
+        # reduced_speech_mask = speech_mask.squeeze(1)[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length).unsqueeze(1)
+
+        reduced_speech_segment_pos = speech_segment_pos[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(),reordered_index.flatten()].view(batch_size, max_reduced_length)
+
+        reduced_durations = durations[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length)*speech_mask.squeeze(1)
+
+        batch = dict(
+            # full_speech_pad=speech,
+            speech_pad=reduced_speech,
+            text_pad=text,
+            masked_position=reduced_masked_position,
+            speech_mask=speech_mask,
+            text_mask=text_mask,
+            speech_segment_pos=reduced_speech_segment_pos,
+            text_segment_pos=text_segment_pos,
+        )
+        before_outs, after_outs, d_outs  = self._forward(batch,reduced_durations)
+
+        loss_mlm, loss_copy = self._calc_mlm_loss(
+            before_outs,after_outs, speech, masked_position
+        )
+        duration_loss = self.duration_criterion(d_outs, reduced_durations)
+        duration_loss = (duration_loss.view(-1) * reduced_masked_position.view(-1).float()).sum() \
+                                            / (reduced_masked_position.float().sum() + 1e-10)
+
+        loss = loss_mlm + duration_loss 
+        if loss_copy is not None:
+            loss += loss_copy
+
+        stats = dict(
+            loss=loss.detach(),
+            loss_mlm=loss_mlm.detach() if loss_mlm is not None else None,
+            loss_copy=loss_copy.detach() if loss_copy is not None else None,
+        )
+
+        # force_gatherable: to-device and to-tensor if scalar for DataParallel
+        loss, stats, weight = force_gatherable((loss, stats, batch_size), loss.device)
+        return loss, stats, weight
+
+    def inference(
+        self,
+        speech, text, masked_position, speech_mask, text_mask, speech_segment_pos, text_segment_pos,
+        durations, reordered_index,
+        span_boundary,
+        y_masks=None,
+        speech_lengths=None, text_lengths=None,
+        feats: Optional[torch.Tensor] = None,
+        spembs: Optional[torch.Tensor] = None,
+        sids: Optional[torch.Tensor] = None,
+        lids: Optional[torch.Tensor] = None,
+        threshold: float = 0.5,
+        minlenratio: float = 0.0,
+        maxlenratio: float = 10.0,
+        use_teacher_forcing: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        
+        batch_size = speech.shape[0]
+        max_reduced_length = reordered_index.shape[1]
+
+        reduced_masked_position = masked_position[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length)
+
+        reduced_speech = speech[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length,-1)
+
+        reduced_speech_segment_pos = speech_segment_pos[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(),reordered_index.flatten()].view(batch_size, max_reduced_length)
+
+        reduced_durations = durations[torch.arange(batch_size).unsqueeze(1).repeat((1, max_reduced_length)).flatten(), reordered_index.flatten()].view(batch_size, max_reduced_length)*speech_mask.squeeze(1)
+
+        batch = dict(
+            speech_pad=reduced_speech,
+            text_pad=text,
+            masked_position=reduced_masked_position,
+            speech_mask=speech_mask,
+            text_mask=text_mask,
+            speech_segment_pos=reduced_speech_segment_pos,
+            text_segment_pos=text_segment_pos,
+        )
+        
+
+        outs = [batch['speech_pad'][:,:span_boundary[0]]]
+        # ys = self._add_first_frame_and_remove_last_frame(batch['speech_pad'])
+        z_cache = None
+        if use_teacher_forcing:
+            before,zs, _, _ = self._forward(batch)
+            if zs is None:
+                zs = before
+
+            outs+=[zs[0][span_boundary[0]:span_boundary[1]]]
+            outs+=[batch['speech_pad'][:,span_boundary[1]:]]
+            return dict(feat_gen=outs)
+        att_ws = torch.stack(att_ws, dim=0)
+        outs += [batch['speech_pad'][:,span_boundary[1]:]]
+        return dict(feat_gen=outs, att_w=att_ws)
+

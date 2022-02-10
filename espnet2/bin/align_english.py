@@ -8,6 +8,9 @@ import os
 import sys
 from tqdm import tqdm
 import multiprocessing as mp
+from espnet2.text.phoneme_tokenizer import G2p_en
+
+g2p_tokenzier=G2p_en(no_space=True)
 
 PHONEME = '/mnt/home/jiahong/tools/english2phoneme/phoneme'
 MODEL_DIR = '/mnt/home/jiahong/tools/alignment/aligner/english'
@@ -215,7 +218,7 @@ def alignment(wav_path, text_string):
                 word2phns[current_word] = phn
                 index+=1
             elif len(splited_line)==4:
-                word2phns[current_word] += ' '+phn
+                word2phns[current_word] += ' '+phn 
         i+=1
     return times2,word2phns
 

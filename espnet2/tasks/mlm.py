@@ -9,11 +9,15 @@ from typing import Tuple
 from typing import Union
 from pathlib import Path
 
+import copy
+import functools
 import yaml
 import numpy as np
 import torch
 from typeguard import check_argument_types
 from typeguard import check_return_type
+from espnet2.train.distributed_utils import DistributedOption
+from espnet2.iterators.multiple_iter_factory import MultipleIterFactory
 
 from espnet.nets.pytorch_backend.tacotron2.decoder import Prenet as DecoderPrenet
 
@@ -22,7 +26,7 @@ from espnet.nets.pytorch_backend.transformer.encoder import MLMDecoder as Transf
 from espnet.nets.pytorch_backend.conformer.encoder import MLMEncoder as ConformerEncoder
 from espnet.nets.pytorch_backend.conformer.encoder import MLMDecoder as ConformerDecoder
 
-from espnet2.tts.sedit.sedit_model import ESPnetMLMModel, ESPnetMLMDecoderModel,ESPnetMLMEncAsDecoderModel
+from espnet2.tts.sedit.sedit_model import ESPnetMLMModel,ESPnetMLMEncAsDecoderModel,ESPnetMLMTTSModel
 from espnet2.train.abs_espnet_model import AbsESPnetModel
 
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
@@ -278,9 +282,13 @@ class MLMTask(AbsTask):
             mlm_prob_factor = 1
         else:
             mlm_probs = [1.0, 1.0, 0.7, 0.6, 0.5]
-            mlm_prob_factor = mlm_probs[epoch // 100]
+            mlm_prob_factor = 0.8 #mlm_probs[epoch // 100]
+        if 'duration_predictor_layers' in args.model_conf.keys() and args.model_conf['duration_predictor_layers']>0:
+            duration_collect=True
+        else:
+            duration_collect=False
         return MLMCollateFn(feats_extract, float_pad_value=0.0, int_pad_value=0,
-        mlm_prob=args.model_conf['mlm_prob']*mlm_prob_factor,mean_phn_span=args.model_conf['mean_phn_span'],attention_window=attention_window,pad_speech=pad_speech,sega_emb=sega_emb)
+        mlm_prob=args.model_conf['mlm_prob']*mlm_prob_factor,mean_phn_span=args.model_conf['mean_phn_span'],attention_window=attention_window,pad_speech=pad_speech,sega_emb=sega_emb,duration_collect=duration_collect)
 
     @classmethod
     def build_preprocess_fn(
@@ -306,14 +314,14 @@ class MLMTask(AbsTask):
     def required_data_names(
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
-        retval = ("speech","text","align_start","align_end")
+        retval = ("speech",)
         return retval
 
     @classmethod
     def optional_data_names(
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
-        retval = ()
+        retval = ("text","align_start","align_end")
         # assert check_return_type(retval)
         return retval
 
@@ -355,7 +363,7 @@ class MLMTask(AbsTask):
 
         pos_enc_class = ScaledPositionalEncoding if args.use_scaled_pos_enc else PositionalEncoding
 
-        if "conformer" in [args.encoder, args.decoder]:
+        if "conformer" == args.encoder:
             conformer_self_attn_layer_type = args.encoder_conf['selfattention_layer_type']
             conformer_pos_enc_layer_type = args.encoder_conf['pos_enc_layer_type']
             conformer_rel_pos_type = "legacy"
@@ -382,8 +390,9 @@ class MLMTask(AbsTask):
                 raise ValueError(f"Unknown rel_pos_type: {conformer_rel_pos_type}")
             args.encoder_conf['selfattention_layer_type'] = conformer_self_attn_layer_type
             args.encoder_conf['pos_enc_layer_type'] = conformer_pos_enc_layer_type 
-            args.decoder_conf['selfattention_layer_type'] = conformer_self_attn_layer_type
-            args.decoder_conf['pos_enc_layer_type'] = conformer_pos_enc_layer_type 
+            if "conformer"==args.decoder:
+                args.decoder_conf['selfattention_layer_type'] = conformer_self_attn_layer_type
+                args.decoder_conf['pos_enc_layer_type'] = conformer_pos_enc_layer_type 
 
 
         # 4. Encoder
@@ -404,7 +413,8 @@ class MLMTask(AbsTask):
             decoder = None
 
         # 8. Build model
-        model = ESPnetMLMEncAsDecoderModel(
+        if 'duration_predictor_layers' in args.model_conf.keys() and args.model_conf['duration_predictor_layers']>0:
+            model = ESPnetMLMTTSModel(
             feats_extract=feats_extract,
             odim=odim,
             normalize=normalize,
@@ -412,7 +422,17 @@ class MLMTask(AbsTask):
             decoder=decoder,
             token_list=token_list,
             **args.model_conf,
-        )
+            )
+        else:
+            model = ESPnetMLMEncAsDecoderModel(
+                feats_extract=feats_extract,
+                odim=odim,
+                normalize=normalize,
+                encoder=encoder,
+                decoder=decoder,
+                token_list=token_list,
+                **args.model_conf,
+            )
 
 
         # 9. Initialize
@@ -474,3 +494,186 @@ class MLMTask(AbsTask):
             model.load_state_dict(state_dict)
 
         return model, args
+
+
+    @classmethod
+    def build_multiple_iter_factory(
+        cls, args: argparse.Namespace, distributed_option: DistributedOption, mode: str
+    ):
+        assert check_argument_types()
+        iter_options = cls.build_iter_options(args, distributed_option, mode)
+        assert len(iter_options.data_path_and_name_and_type) > 0, len(
+            iter_options.data_path_and_name_and_type
+        )
+        dataset_training_portion = {'libritts':0.3, "librispeech":0.3, "librilight":0.3,"vctk":0.1,"librilight_sub":0.3}
+        dataset_args = []
+
+        # 1. Sanity check
+        dataset_data_path_and_name_and_type = {}
+        for path in iter_options.data_path_and_name_and_type:
+            if 'splits50' in path[0]:
+                dataset_name = 'librilight'
+            else:
+                dataset_name = path[0].split('/')[-2]
+            if dataset_name in dataset_data_path_and_name_and_type:
+                dataset_data_path_and_name_and_type[dataset_name].append(path)
+            else:
+                dataset_data_path_and_name_and_type[dataset_name] = [path]
+        dataset_shape_files = {}
+        for path in iter_options.shape_files:
+            if 'splits50' in path:
+                dataset_name = 'librilight'
+            else:
+                dataset_name = path.split('/')[-3].split('_stats')[0]
+            if dataset_name in dataset_shape_files:
+                dataset_shape_files[dataset_name].append(path)
+            else:
+                dataset_shape_files[dataset_name] = [path]
+        dataset_num_iters_per_epoch = {}
+        for k,v in dataset_data_path_and_name_and_type.items():
+            dataset_num_iters_per_epoch[k] = int(iter_options.num_iters_per_epoch*dataset_training_portion[k])
+
+        max_cache_size = iter_options.max_cache_size
+        args_24k = copy.deepcopy(args)
+        args_24k.feats_extract_conf['fs']=24000
+        args_24k.feats_extract_conf['n_fft']=2048
+        args_24k.feats_extract_conf['hop_length']=300
+        args_24k.feats_extract_conf['win_length']=1200
+
+        args_16k = copy.deepcopy(args)
+        args_16k.feats_extract_conf['fs']=16000
+        args_16k.feats_extract_conf['n_fft']=1024
+        args_16k.feats_extract_conf['hop_length']=200
+        args_16k.feats_extract_conf['win_length']=800
+
+        dataset_args = {'libritts':args_24k, 'librispeech':args_16k, 'librilight':args_16k,'vctk':args_24k,'librilight_sub':args_16k}
+        # Note that iter-factories are built for each epoch at runtime lazily.
+        build_funcs = {
+            k: functools.partial(
+                cls.build_iter_factory,
+                dataset_args[k],
+                distributed_option,
+                mode,
+                kwargs=dict(
+                    data_path_and_name_and_type=dataset_data_path_and_name_and_type[k],
+                    shape_files=dataset_shape_files[k],
+                    num_iters_per_epoch=dataset_num_iters_per_epoch[k],
+                    max_cache_size=iter_options.max_cache_size,
+                ),
+            )
+            for k in dataset_data_path_and_name_and_type.keys()
+        }
+        
+        # if 'librilight' in build_funcs.keys():
+        #     build_funcs['librilight'] = functools.partial(
+        #             cls.build_multiple_iter_factory_for_split,
+        #             dataset_args['librilight'],
+        #             distributed_option,
+        #             mode,
+        #             kwargs=dict(
+        #                 data_path_and_name_and_type=dataset_data_path_and_name_and_type['librilight'],
+        #                 shape_files=dataset_shape_files['librilight'],
+        #                 num_iters_per_epoch=dataset_num_iters_per_epoch['librilight'],
+        #                 max_cache_size=iter_options.max_cache_size,
+        #             )
+        #     )
+
+        build_funcs_list = list(build_funcs.values())
+        
+        # 3. Build MultipleIterFactory
+        return MultipleIterFactory(
+            build_funcs=build_funcs_list, shuffle=iter_options.train, seed=args.seed,
+        )
+        # build_funcs_list = [build_funcs['librilight_sub'],build_funcs['vctk'],build_funcs['libritts'],build_funcs['librispeech'],]
+        # return MultipleIterFactory(
+        #     build_funcs=build_funcs_list, shuffle=False, seed=args.seed,
+        # )
+
+
+    @classmethod
+    def build_multiple_iter_factory_for_split(
+        cls, args: argparse.Namespace, distributed_option: DistributedOption, mode: str, kwargs: dict = None,
+    ):
+        assert check_argument_types()
+        iter_options = cls.build_iter_options(args, distributed_option, mode)
+        assert len(iter_options.data_path_and_name_and_type) > 0, len(
+            iter_options.data_path_and_name_and_type
+        )
+        # Overwrite iter_options if any kwargs is given
+        if kwargs is not None:
+            for k, v in kwargs.items():
+                setattr(iter_options, k, v)
+
+        # 1. Sanity check
+        num_splits = None
+        for path in [
+            path for path, _, _ in iter_options.data_path_and_name_and_type
+        ] + list(iter_options.shape_files):
+            if not Path(path).is_dir():
+                raise RuntimeError(f"{path} is not a directory")
+            p = Path(path) / "num_splits"
+            if not p.exists():
+                raise FileNotFoundError(f"{p} is not found")
+            with p.open() as f:
+                _num_splits = int(f.read())
+                if num_splits is not None and num_splits != _num_splits:
+                    raise RuntimeError(
+                        f"Number of splits are mismathed: "
+                        f"{iter_options.data_path_and_name_and_type[0][0]} and {path}"
+                    )
+                num_splits = _num_splits
+
+            for i in range(num_splits):
+                p = Path(path) / f"split.{i}"
+                if not p.exists():
+                    raise FileNotFoundError(f"{p} is not found")
+
+        # 2. Create functions to build an iter factory for each splits
+        data_path_and_name_and_type_list = [
+            [
+                (str(Path(p) / f"split.{i}"), n, t)
+                for p, n, t in iter_options.data_path_and_name_and_type
+            ]
+            for i in range(num_splits)
+        ]
+        shape_files_list = [
+            [str(Path(s) / f"split.{i}") for s in iter_options.shape_files]
+            for i in range(num_splits)
+        ]
+        num_iters_per_epoch_list = [
+            iter_options.num_iters_per_epoch
+            if iter_options.num_iters_per_epoch is not None
+            else None
+            for i in range(num_splits)
+        ]
+        max_cache_size = iter_options.max_cache_size / num_splits
+
+        # Note that iter-factories are built for each epoch at runtime lazily.
+        build_funcs = [
+            functools.partial(
+                cls.build_iter_factory,
+                args,
+                distributed_option,
+                mode,
+                kwargs=dict(
+                    data_path_and_name_and_type=_data_path_and_name_and_type,
+                    shape_files=_shape_files,
+                    num_iters_per_epoch=_num_iters_per_epoch,
+                    max_cache_size=max_cache_size,
+                ),
+            )
+            for (
+                _data_path_and_name_and_type,
+                _shape_files,
+                _num_iters_per_epoch,
+            ) in zip(
+                data_path_and_name_and_type_list,
+                shape_files_list,
+                num_iters_per_epoch_list,
+            )
+        ]
+
+        # 3. Build MultipleIterFactory
+        return MultipleIterFactory(
+            build_funcs=build_funcs, shuffle=iter_options.train, seed=args.seed
+        )

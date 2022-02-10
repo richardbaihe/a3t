@@ -205,8 +205,8 @@ def calculate(file_list, gt_file_list, args, MCD):
         gt_mcep_dtw_pow = gt_mcep_nonsil_pow[twf_pow[1]]
         diff2sum = np.sum((cvt_mcep_dtw_pow - gt_mcep_dtw_pow) ** 2, 1)
         mcd = np.mean(10.0 / np.log(10.0) * np.sqrt(2 * diff2sum), 0)
-
-        print("{} {}".format(gt_basename, mcd))
+        if args.silenced == -1:
+            print("{} {}".format(gt_basename, mcd))
         MCD.append(mcd)
 
 
@@ -244,6 +244,9 @@ def get_parser():
 
     parser.add_argument(
         "--n_jobs", default=40, type=int, help="number of parallel jobs"
+    )
+    parser.add_argument(
+        "--silenced", default=-1, type=int, help="-1 for logging otherwise no logging"
     )
     return parser
 

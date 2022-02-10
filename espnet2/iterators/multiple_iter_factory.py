@@ -21,7 +21,7 @@ class MultipleIterFactory(AbsIterFactory):
         self.seed = seed
         self.shuffle = shuffle
 
-    def build_iter(self, epoch: int, shuffle: bool = None) -> Iterator:
+    def build_iter(self, epoch: int, shuffle: bool = None, collate_fn=None) -> Iterator:
         if shuffle is None:
             shuffle = self.shuffle
 
@@ -33,5 +33,6 @@ class MultipleIterFactory(AbsIterFactory):
         for i, build_func in enumerate(build_funcs):
             logging.info(f"Building {i}th iter-factory...")
             iter_factory = build_func()
+            
             assert isinstance(iter_factory, AbsIterFactory), type(iter_factory)
-            yield from iter_factory.build_iter(epoch, shuffle)
+            yield from iter_factory.build_iter(epoch, shuffle, collate_fn)

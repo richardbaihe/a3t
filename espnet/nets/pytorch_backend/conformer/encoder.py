@@ -527,17 +527,34 @@ class MLMEncoder(torch.nn.Module):
             speech_pad = self.speech_embed(speech_pad, masked_position)
         else:
             speech_pad = self.speech_embed(speech_pad)
-        text_pad = self.text_embed(text_pad)
+        # pure speech input
+        if -2 in text_pad:
+            text_pad = text_pad+3
+            text_mask = text_pad.bool().unsqueeze(1)
+            text_segment_pos = torch.zeros_like(text_pad)
+            text_pad = self.text_embed(text_pad)
+            text_pad = (text_pad[0] + self.segment_emb(text_segment_pos), text_pad[1])
+            text_segment_pos=None
+        elif text_pad is not None:
+            text_pad = self.text_embed(text_pad)
+        segment_emb = None
         if speech_segment_pos is not None and text_segment_pos is not None and self.segment_emb:
             speech_segment_emb = self.segment_emb(speech_segment_pos)
             text_segment_emb = self.segment_emb(text_segment_pos)
             text_pad = (text_pad[0] + text_segment_emb, text_pad[1])
             speech_pad = (speech_pad[0] + speech_segment_emb, speech_pad[1])
+            segment_emb = torch.cat([speech_segment_emb, text_segment_emb],axis=1)
         if self.pre_speech_encoders:
             speech_pad, _ = self.pre_speech_encoders(speech_pad, speech_mask)
-        xs = torch.cat([speech_pad[0], text_pad[0]], axis=1)
-        xs_pos_emb = torch.cat([speech_pad[1], text_pad[1]], axis=1)
-        masks = torch.cat([speech_mask,text_mask],axis=-1)
+
+        if text_pad is not None:
+            xs = torch.cat([speech_pad[0], text_pad[0]], axis=1)
+            xs_pos_emb = torch.cat([speech_pad[1], text_pad[1]], axis=1)
+            masks = torch.cat([speech_mask,text_mask],axis=-1)
+        else:
+            xs = speech_pad[0]
+            xs_pos_emb = speech_pad[1]
+            masks = speech_mask
 
         xs, masks = self.encoders((xs,xs_pos_emb), masks)
 
@@ -546,11 +563,11 @@ class MLMEncoder(torch.nn.Module):
         if self.normalize_before:
             xs = self.after_norm(xs)
 
-        return xs, masks
+        return xs, masks #, segment_emb
 
 class MLMDecoder(MLMEncoder):
 
-    def forward(self, xs, masks, masked_position=None):
+    def forward(self, xs, masks, masked_position=None,segment_emb=None):
         """Encode input sequence.
 
         Args:
@@ -569,7 +586,8 @@ class MLMDecoder(MLMEncoder):
             xs, masks = self.embed(xs, masks)
         else:
             xs = self.embed(xs)
-
+        if segment_emb:
+            xs = (xs[0] + segment_emb, xs[1])
         if self.intermediate_layers is None:
             xs, masks = self.encoders(xs, masks)
         else:

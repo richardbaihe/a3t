@@ -1,4 +1,4 @@
-"""Trainer module."""
+git"""Trainer module."""
 import argparse
 from contextlib import contextmanager
 import dataclasses
@@ -180,13 +180,16 @@ class Trainer:
         use_cluster = False
         try :
             os.environ["SLURM_JOB_ID"]
-            use_cluster = True
+            info = slurm.job_info()
+            if info['TimeLimit'] == 'UNLIMITED':
+                use_cluster=False
+            else:
+                use_cluster = True
         except:
             use_cluster = False
 
         if use_cluster:
             resume_command, death_time, jobID = slurm.restart_command()
-            info = slurm.job_info()
             job_name = info.get("JobName")
             workdir = info.get("WorkDir")
             jobID = info.get('jobID')

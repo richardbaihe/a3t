@@ -117,6 +117,7 @@ class MLMCollateFn:
         attention_window: int=0,
         pad_speech: bool=False,
         sega_emb: bool=False,
+        duration_collect: bool=False
 
     ):
         self.mlm_prob=mlm_prob
@@ -128,6 +129,7 @@ class MLMCollateFn:
         self.attention_window=attention_window
         self.pad_speech=pad_speech
         self.sega_emb=sega_emb
+        self.duration_collect = duration_collect
 
     def __repr__(self):
         return (
@@ -148,7 +150,8 @@ class MLMCollateFn:
             feats_extract=self.feats_extract,
             attention_window=self.attention_window,
             pad_speech=self.pad_speech,
-            sega_emb=self.sega_emb
+            sega_emb=self.sega_emb,
+            duration_collect=self.duration_collect
         )
 
 
@@ -163,6 +166,7 @@ def mlm_collate_fn(
     attention_window: int = 0,
     pad_speech: bool=False,
     sega_emb: bool=False,
+    duration_collect: bool=False,
 ) -> Tuple[List[str], Dict[str, torch.Tensor]]:
     """Concatenate ndarray-list to an array and convert to torch.Tensor.
 
@@ -214,11 +218,24 @@ def mlm_collate_fn(
             output[key + "_lengths"] = lens
 
     feats, feats_lengths = feats_extract(output["speech"], output["speech_lengths"])
-    text, text_lengths = output["text"], output["text_lengths"]
-    align_start, align_start_lengths, align_end, align_end_lengths = output["align_start"], output["align_start_lengths"], output["align_end"], output["align_end_lengths"]
-    align_start = torch.floor(feats_extract.fs*align_start/feats_extract.hop_length).int()
-    align_end = torch.floor(feats_extract.fs*align_end/feats_extract.hop_length).int()
-    max_tlen = max(text_lengths).item()
+    batch_size = feats.shape[0]
+    if 'text' not in output:
+        text=torch.zeros_like(feats_lengths.unsqueeze(-1))-2
+        text_lengths=torch.zeros_like(feats_lengths)+1
+        max_tlen=1
+        align_start=torch.zeros_like(text)
+        align_end=torch.zeros_like(text)
+        align_start_lengths=torch.zeros_like(feats_lengths)
+        align_end_lengths=torch.zeros_like(feats_lengths)
+        sega_emb=False
+        mean_phn_span = 0
+        mlm_prob = 0.15
+    else:
+        text, text_lengths = output["text"], output["text_lengths"]
+        align_start, align_start_lengths, align_end, align_end_lengths = output["align_start"], output["align_start_lengths"], output["align_end"], output["align_end_lengths"]
+        align_start = torch.floor(feats_extract.fs*align_start/feats_extract.hop_length).int()
+        align_end = torch.floor(feats_extract.fs*align_end/feats_extract.hop_length).int()
+        max_tlen = max(text_lengths).item()
     max_slen = max(feats_lengths).item()
     speech_pad = feats[:, : max_slen]
     if attention_window>0 and pad_speech:
@@ -235,18 +252,26 @@ def mlm_collate_fn(
     span_boundary = None
     if 'span_boundary' in output.keys():
         span_boundary = output['span_boundary']
-    masked_position, y_masks = phones_masking(
-                    speech_pad,
-                    speech_mask,
-                    align_start,
-                    align_end,
-                    align_start_lengths,
-                    mlm_prob,
-                    mean_phn_span,
-                    span_boundary)
-    speech_segment_pos, text_segment_pos = get_segment_pos(speech_pad, text_pad, align_start, align_end, align_start_lengths,sega_emb)
-    
+
+    masked_position, _ = phones_masking(
+            speech_pad,
+            speech_mask,
+            align_start,
+            align_end,
+            align_start_lengths,
+            mlm_prob,
+            mean_phn_span,
+            span_boundary)
+
     output_dict = {}
+    if duration_collect and 'text' in output:
+        reordered_index, speech_segment_pos,text_segment_pos, durations,feats_lengths = get_segment_pos_reduce_duration(speech_pad, text_pad, align_start, align_end, align_start_lengths,sega_emb, masked_position, feats_lengths)
+        speech_mask = make_non_pad_mask(feats_lengths.tolist(), speech_pad[:,:reordered_index.shape[1],0], length_dim=1).to(speech_pad.device).unsqueeze(-2)
+        output_dict['durations'] = durations
+        output_dict['reordered_index'] = reordered_index
+    else:
+        speech_segment_pos, text_segment_pos = get_segment_pos(speech_pad, text_pad, align_start, align_end, align_start_lengths,sega_emb)
+    
     output_dict['speech'] = speech_pad
     output_dict['text'] = text_pad
     output_dict['masked_position'] = masked_position
@@ -254,42 +279,94 @@ def mlm_collate_fn(
     output_dict['text_mask'] = text_mask
     output_dict['speech_segment_pos'] = speech_segment_pos
     output_dict['text_segment_pos'] = text_segment_pos
-    output_dict['y_masks'] = y_masks
+    # output_dict['y_masks'] = y_masks
     output_dict['speech_lengths'] = output["speech_lengths"]
-    output_dict['text_lengths'] = output["text_lengths"]
+    output_dict['text_lengths'] = text_lengths
     output = (uttids, output_dict)
-    assert check_return_type(output)
+    # assert check_return_type(output)
     return output
 
-def pad_to_longformer_att_window(text, max_len, max_tlen,attention_window):
-    round = max_len % attention_window
-    if round != 0:
-        max_tlen += (attention_window - round)
-        n_batch = text.shape[0]
-        text_pad = text.new_zeros(n_batch, max_tlen, *text[0].size()[1:])
-        for i in range(n_batch):
-            text_pad[i, : text[i].size(0)] = text[i]
-    else:
-        text_pad = text[:, : max_tlen]
-    return text_pad, max_tlen
+
+def get_segment_pos_reduce_duration(speech_pad, text_pad, align_start, align_end, 
+align_start_lengths,sega_emb, masked_position,feats_lengths):
+    bz, speech_len, _ = speech_pad.size()
+    text_segment_pos = torch.zeros_like(text_pad)
+    speech_segment_pos = torch.zeros((bz, speech_len),dtype=text_pad.dtype, device=text_pad.device)
+    
+    reordered_index=torch.zeros(bz, speech_len, dtype=align_start_lengths.dtype)
+
+    durations = torch.ones((bz, speech_len), dtype=align_start_lengths.dtype)
+    max_reduced_length = 0
+    if not sega_emb:
+        return speech_pad, masked_position, speech_segment_pos,text_segment_pos, durations
+    for idx in range(bz):
+        first_idx = []
+        last_idx = []
+        align_length = align_start_lengths[idx].item()
+        for j in range(align_length):
+            s,e = align_start[idx][j].item(), align_end[idx][j].item()
+            if j==0:
+                if torch.sum(masked_position[idx][0:s]) ==0:
+                    first_idx.extend(range(0,s))
+                else:
+                    first_idx.extend([0])
+                    last_idx.extend(range(1,s))
+            if torch.sum(masked_position[idx][s:e]) ==0:
+                first_idx.extend(range(s,e))
+            else:
+                first_idx.extend([s])
+                last_idx.extend(range(s+1,e))
+                durations[idx][s] = e-s
+            speech_segment_pos[idx][s:e] = j+1
+            text_segment_pos[idx][j] = j+1
+        max_reduced_length = max(len(first_idx)+feats_lengths[idx].item()-e,max_reduced_length)
+        first_idx.extend(range(e,speech_len))
+        reordered_index[idx] = torch.tensor((first_idx+last_idx),dtype=align_start_lengths.dtype)
+        feats_lengths[idx] = len(first_idx)
+    reordered_index = reordered_index[:,:max_reduced_length]
+
+    return reordered_index, speech_segment_pos,text_segment_pos, durations,feats_lengths
+
+def get_segment_pos(speech_pad, text_pad, align_start, align_end, align_start_lengths,sega_emb):
+    bz, speech_len, _ = speech_pad.size()
+    text_segment_pos = torch.zeros_like(text_pad)
+    speech_segment_pos = torch.zeros((bz, speech_len),dtype=text_pad.dtype, device=text_pad.device)
+    if not sega_emb:
+        return speech_segment_pos, text_segment_pos
+    for idx in range(bz):
+        align_length = align_start_lengths[idx].item()
+        for j in range(align_length):
+            s,e = align_start[idx][j].item(), align_end[idx][j].item()
+            speech_segment_pos[idx][s:e] = j+1
+            text_segment_pos[idx][j] = j+1
+        
+    return speech_segment_pos, text_segment_pos
+
 
 def phones_masking(xs_pad, src_mask, align_start, align_end, align_start_lengths, mlm_prob, mean_phn_span, span_boundary=None):
     bz, sent_len, _ = xs_pad.size()
     mask_num_lower = math.ceil(sent_len * mlm_prob)
     masked_position = np.zeros((bz, sent_len))
-    y_masks = torch.ones(bz,sent_len,sent_len,device=xs_pad.device,dtype=xs_pad.dtype)
-    tril_masks = torch.tril(y_masks)
+    y_masks = None
+    # y_masks = torch.ones(bz,sent_len,sent_len,device=xs_pad.device,dtype=xs_pad.dtype)
+    # tril_masks = torch.tril(y_masks)
     if mlm_prob == 1.0:
         masked_position += 1
-        y_masks = tril_masks
+        # y_masks = tril_masks
+    elif mean_phn_span == 0:
+        # only speech 
+        length = sent_len
+        mean_phn_span = min(length*mlm_prob//3, 50)
+        masked_phn_indices = random_spans_noise_mask(length,mlm_prob, mean_phn_span).nonzero()
+        masked_position[:,masked_phn_indices]=1
     else:
         for idx in range(bz):
             if span_boundary is not None:
                 for s,e in zip(span_boundary[idx][::2], span_boundary[idx][1::2]):
                     masked_position[idx, s:e] = 1
-                    # span_boundary.extend([s,e])
-                    y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
-                    y_masks[idx, e:, s:e ] = 0
+
+                    # y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
+                    # y_masks[idx, e:, s:e ] = 0
             else:
                 length = align_start_lengths[idx].item()
                 if length<2:
@@ -299,15 +376,13 @@ def phones_masking(xs_pad, src_mask, align_start, align_end, align_start_lengths
                 masked_end = align_end[idx][masked_phn_indices].tolist()
                 for s,e in zip(masked_start, masked_end):
                     masked_position[idx, s:e] = 1
-                    y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
-                    y_masks[idx, e:, s:e ] = 0
+                    # y_masks[idx, :, s:e] = tril_masks[idx, :, s:e]
+                    # y_masks[idx, e:, s:e ] = 0
     non_eos_mask = src_mask.view(xs_pad.size()[:2]).float().cpu().numpy()
-    # non_eos_mask = np.concatenate((non_eos_mask[:,1:], np.zeros(non_eos_mask[:,:1].shape, dtype=int)), axis=1)
     masked_position = masked_position * non_eos_mask
-    y_masks = src_mask & y_masks.bool()
+    # y_masks = src_mask & y_masks.bool()
 
     return torch.BoolTensor(masked_position).to(xs_pad.device), y_masks
-
 
 def random_spans_noise_mask(length, mlm_prob, mean_phn_span):
 
@@ -370,18 +445,14 @@ def random_spans_noise_mask(length, mlm_prob, mean_phn_span):
 
     return is_noise[:orig_length]
 
-
-def get_segment_pos(speech_pad, text_pad, align_start, align_end, align_start_lengths,sega_emb):
-    bz, speech_len, _ = speech_pad.size()
-    text_segment_pos = torch.zeros_like(text_pad)
-    speech_segment_pos = torch.zeros((bz, speech_len),dtype=text_pad.dtype, device=text_pad.device)
-    if not sega_emb:
-        return speech_segment_pos, text_segment_pos
-    for idx in range(bz):
-        align_length = align_start_lengths[idx].item()
-        for j in range(align_length):
-            s,e = align_start[idx][j].item(), align_end[idx][j].item()
-            speech_segment_pos[idx][s:e] = j+1
-            text_segment_pos[idx][j] = j+1
-        
-    return speech_segment_pos, text_segment_pos
+def pad_to_longformer_att_window(text, max_len, max_tlen,attention_window):
+    round = max_len % attention_window
+    if round != 0:
+        max_tlen += (attention_window - round)
+        n_batch = text.shape[0]
+        text_pad = text.new_zeros(n_batch, max_tlen, *text[0].size()[1:])
+        for i in range(n_batch):
+            text_pad[i, : text[i].size(0)] = text[i]
+    else:
+        text_pad = text[:, : max_tlen]
+    return text_pad, max_tlen

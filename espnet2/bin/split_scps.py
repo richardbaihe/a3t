@@ -9,7 +9,7 @@ from typing import List
 from typing import Optional
 
 from espnet.utils.cli_utils import get_commandline_args
-
+from tqdm import tqdm
 
 def split_scps(
     scps: List[str],
@@ -42,7 +42,7 @@ def split_scps(
 
     counter = Counter()
     linenum = -1
-    for linenum, lines in enumerate(zip_longest(*scp_files)):
+    for linenum, lines in tqdm(enumerate(zip_longest(*scp_files))):
         if any(line is None for line in lines):
             raise RuntimeError("Number of lines are mismatched")
 
