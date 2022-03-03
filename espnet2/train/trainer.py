@@ -1,4 +1,4 @@
-git"""Trainer module."""
+"""Trainer module."""
 import argparse
 from contextlib import contextmanager
 import dataclasses

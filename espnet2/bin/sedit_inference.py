@@ -21,6 +21,8 @@ from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask, pad_list,m
 from espnet2.bin.align_english import alignment
 import librosa
 import random
+from ipywidgets import widgets
+import IPython.display as ipd
 
 duration_path_dict = {
     "ljspeech":"/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
@@ -40,6 +42,36 @@ np.random.seed(0)
 PHONEME = '/mnt/home/jiahong/tools/english2phoneme/phoneme'
 MODEL_DIR = '/mnt/home/jiahong/tools/alignment/aligner/english'
 
+
+def display_audios(data_dict, sr=24000):
+    audio_widgets = []
+    for key,audio in data_dict.items():
+        out = widgets.Output()
+        with out:
+            ipd.display(ipd.Audio(data=audio, rate=sr))
+            ipd.display(key)
+        audio_widgets.append(out)
+    return widgets.HBox(audio_widgets)
+
+def get_tts_audio(prompt_spembds, prompt_speech, target_text, tts_model, processor, vocoder):
+    decode_conf = {}
+    decode_conf.update(use_teacher_forcing=False)
+    decode_conf.update(alpha=1.0)
+    cfg = decode_conf
+
+    data = processor("<dummy>", dict(text=target_text, speech=prompt_speech))
+    batch = dict(text=data['text'], speech=data['speech'], spembs=prompt_spembds)
+
+    batch = to_device(batch, 'cpu')
+
+    output_dict = tts_model.inference(**batch, **cfg)
+    if output_dict.get("feat_gen_denorm") is not None:
+        out_feat = output_dict["feat_gen_denorm"]
+    else:
+        out_feat = output_dict["feat_gen"]
+
+    tts_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
+    return tts_wav
 
 def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt', return_mel=False):
     decode_conf = {}
@@ -233,7 +265,7 @@ def load_vocoder(vocoder_tag="parallel_wavegan/libritts_parallel_wavegan.v1"):
 
 def load_model(model_name):
     config_path='{}/config.yaml'.format(model_name)
-    model_path = '{}/train.loss.best.pth'.format(model_name)
+    model_path = '{}/train.loss.ave_5best.pth'.format(model_name)
     if not os.path.exists(model_path):
         model_path = '{}/train.loss.best.pth'.format(model_name)
 
@@ -309,10 +341,14 @@ def get_masked_mel_boundary(mfa_start, mfa_end, fs, hop_length, span_tobe_replac
     align_end =torch.tensor(mfa_end).unsqueeze(0)
     align_start = torch.floor(fs*align_start/hop_length).int()
     align_end = torch.floor(fs*align_end/hop_length).int()
-    span_boundary=[align_start[0].tolist()[span_tobe_replaced[0]],align_end[0].tolist()[span_tobe_replaced[1]-1]]
+    if span_tobe_replaced[0]>=len(mfa_start):
+        span_boundary = [align_end[0].tolist()[-1],align_end[0].tolist()[-1]]
+    else:
+        span_boundary=[align_start[0].tolist()[span_tobe_replaced[0]],align_end[0].tolist()[span_tobe_replaced[1]-1]]
     return span_boundary
 
 def get_phns_and_spans(wav_path, old_str, new_str):
+    append_new_str = (old_str == new_str[:len(old_str)])
     old_phns, mfa_start, mfa_end = [], [], []
     times2,word2phns = alignment(wav_path, old_str)
     for item in times2:
@@ -348,26 +384,34 @@ def get_phns_and_spans(wav_path, old_str, new_str):
     word2phns_max_index = int(list(word2phns.keys())[-1].split('_')[0])
     new_word2phns_max_index = int(list(new_word2phns.keys())[-1].split('_')[0])
     new_phns_middle = []
-    for key in list(word2phns.keys())[::-1]:
-        idx, wrd = key.split('_')
-        if wrd=='sp':
-            sp_count +=1
-            new_phns_right = ['sp']+new_phns_right
-        else:
-            idx = str(new_word2phns_max_index-(word2phns_max_index-int(idx)-sp_count))
-            if idx+'_'+wrd in new_word2phns:
-                right_index-=len(new_word2phns[idx+'_'+wrd])
-                new_phns_right = word2phns[key].split() + new_phns_right
+    if append_new_str:
+        new_phns_right = []
+        new_phns_middle = new_phns[left_index:]
+        span_tobe_replaced[0] = len(new_phns_left)
+        span_tobe_added[0] = len(new_phns_left)
+        span_tobe_added[1] = len(new_phns_left) + len(new_phns_middle)
+        span_tobe_replaced[1] = len(old_phns) - len(new_phns_right)
+    else:
+        for key in list(word2phns.keys())[::-1]:
+            idx, wrd = key.split('_')
+            if wrd=='sp':
+                sp_count +=1
+                new_phns_right = ['sp']+new_phns_right
             else:
-                span_tobe_replaced[1] = len(old_phns) - len(new_phns_right)
-                new_phns_middle = new_phns[left_index:right_index]
-                span_tobe_added[1] = len(new_phns_left) + len(new_phns_middle)
-                if len(new_phns_middle) == 0:
-                    span_tobe_added[1] = min(span_tobe_added[1]+1, len(new_phns))
-                    span_tobe_added[0] = max(0, span_tobe_added[0]-1)
-                    span_tobe_replaced[0] = max(0, span_tobe_replaced[0]-1)
-                    span_tobe_replaced[1] = min(span_tobe_replaced[1]+1, len(old_phns))
-                break
+                idx = str(new_word2phns_max_index-(word2phns_max_index-int(idx)-sp_count))
+                if idx+'_'+wrd in new_word2phns:
+                    right_index-=len(new_word2phns[idx+'_'+wrd])
+                    new_phns_right = word2phns[key].split() + new_phns_right
+                else:
+                    span_tobe_replaced[1] = len(old_phns) - len(new_phns_right)
+                    new_phns_middle = new_phns[left_index:right_index]
+                    span_tobe_added[1] = len(new_phns_left) + len(new_phns_middle)
+                    if len(new_phns_middle) == 0:
+                        span_tobe_added[1] = min(span_tobe_added[1]+1, len(new_phns))
+                        span_tobe_added[0] = max(0, span_tobe_added[0]-1)
+                        span_tobe_replaced[0] = max(0, span_tobe_replaced[0]-1)
+                        span_tobe_replaced[1] = min(span_tobe_replaced[1]+1, len(old_phns))
+                    break
     new_phns = new_phns_left+new_phns_middle+new_phns_right
 
     return mfa_start, mfa_end, old_phns, new_phns, span_tobe_replaced, span_tobe_added
@@ -419,10 +463,11 @@ def prepare_features_with_duration(mlm_model, old_str, new_str, wav_path,duratio
     # d_factor = 2
         new_durations = duration_predict(new_phns, fs, hop_length,fs2_model, fs2_processor,wav_org ,sid=sid)
         new_durations_adjusted = [d_factor*i for i in new_durations]
-        if old_phns[span_tobe_replaced[0]] == new_phns[span_tobe_added[0]]:
+        if span_tobe_replaced[0]<len(old_phns) and old_phns[span_tobe_replaced[0]] == new_phns[span_tobe_added[0]]:
             new_durations_adjusted[span_tobe_added[0]] = original_old_durations[span_tobe_replaced[0]]
-        if old_phns[span_tobe_replaced[1]] == new_phns[span_tobe_added[1]]:
-            new_durations_adjusted[span_tobe_added[1]] = original_old_durations[span_tobe_replaced[1]]
+        if span_tobe_replaced[1]<len(old_phns) and span_tobe_added[1]<len(new_phns):
+            if old_phns[span_tobe_replaced[1]] == new_phns[span_tobe_added[1]]:
+                new_durations_adjusted[span_tobe_added[1]] = original_old_durations[span_tobe_replaced[1]]
     new_span_duration_sum = sum(new_durations_adjusted[span_tobe_added[0]:span_tobe_added[1]])
     old_span_duration_sum = sum(original_old_durations[span_tobe_replaced[0]:span_tobe_replaced[1]])
     duration_offset =  new_span_duration_sum - old_span_duration_sum
@@ -439,8 +484,12 @@ def prepare_features_with_duration(mlm_model, old_str, new_str, wav_path,duratio
     new_mfa_end += [i+duration_offset for i in mfa_end[span_tobe_replaced[1]:]]
     
     # 3. get new wav 
-    left_index = int(np.floor(mfa_start[span_tobe_replaced[0]]*fs))
-    right_index = int(np.ceil(mfa_end[span_tobe_replaced[1]-1]*fs))
+    if span_tobe_replaced[0]>=len(mfa_start):
+        left_index = len(wav_org)
+        right_index = left_index
+    else:
+        left_index = int(np.floor(mfa_start[span_tobe_replaced[0]]*fs))
+        right_index = int(np.ceil(mfa_end[span_tobe_replaced[1]-1]*fs))
     new_blank_wav = np.zeros((int(np.ceil(new_span_duration_sum*fs)),), dtype=wav_org.dtype)
     new_wav_org = np.concatenate([wav_org[:left_index], new_blank_wav, wav_org[right_index:]])
 
@@ -573,22 +622,24 @@ def plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_s
                 "origin":wav_org}
     return data_dict, old_span_boundary
 
-def merge_two_data(uid1,uid2, prefix):
+def merge_two_data(uid1,uid2, prefix1,prefix2=None, sr=24000):
     # text
     # wav
     # align_star
     # align_end
-    str1,wav_path1 = read_data(uid1, prefix)
-    str2,wav_path2 = read_data(uid2, prefix)
+    if not prefix2:
+        prefix2=prefix1
+    str1,wav_path1 = read_data(uid1, prefix1)
+    str2,wav_path2 = read_data(uid2, prefix2)
     new_str = str1+' '+str2
-    wav_org1, sr = librosa.load(wav_path1, sr=24000)
-    wav_org2, sr = librosa.load(wav_path2, sr=24000)
+    wav_org1, sr = librosa.load(wav_path1, sr)
+    wav_org2, sr = librosa.load(wav_path2, sr)
     new_wav = np.concatenate([wav_org1, wav_org2])
-    _, mfa_start1, mfa_end1, _ = get_align_data(uid1,prefix)
-    _, mfa_start2, mfa_end2, _ = get_align_data(uid2,prefix)
+    _, mfa_start1, mfa_end1, _ = get_align_data(uid1,prefix1)
+    _, mfa_start2, mfa_end2, _ = get_align_data(uid2,prefix2)
     new_mfa_start = mfa_start1+[i+mfa_end1[-1] for i in mfa_start2]
     new_mfa_end = mfa_end1+[i+mfa_end1[-1] for i in mfa_end2]
-    new_prefix = os.path.join(prefix,'merged')
+    new_prefix = os.path.join(prefix1,'merged')
     os.makedirs(new_prefix,exist_ok=True)
     with open(os.path.join(new_prefix,'text'),'w') as f_out:
         f_out.write(uid2+' '+new_str)
@@ -634,8 +685,29 @@ def read_emotion_data(speaker_id, text_tag, emo_tag, level_tag):
     filename = "/mnt/scratch/jiahong/emotion_datasets/CREMA-D/AudioWAV/"+ '_'.join([speaker_id, text_tag, emo_tag, level_tag ])+'.wav'
     return text_dict[text_tag], filename
     
-    
-def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="conformer",old_str="", new_str=""):
+
+def prompt_decoding_fn(model_name, wav_path,full_origin_str, old_str, new_str, vocoder,duration_preditor_path,sid=None, non_autoreg=True):
+    wav_org, input_feat, output_feat, old_span_boundary, new_span_boundary, fs, hop_length = get_mlm_output(
+                                                            model_name,
+                                                            wav_path,
+                                                            old_str,
+                                                            new_str, 
+                                                            duration_preditor_path,
+                                                            use_teacher_forcing=non_autoreg,
+                                                            sid=sid
+                                                            )
+
+    replaced_wav = vocoder(output_feat).detach().float().data.cpu().numpy()
+
+    old_time_boundary = [hop_length * x  for x in old_span_boundary]
+    new_time_boundary = [hop_length * x  for x in new_span_boundary]
+    new_wav = replaced_wav[new_time_boundary[0]:]
+    # "origin_vocoder":vocoder_origin_wav, 
+    data_dict = {"prompt":wav_org,
+                "new_wav":new_wav}
+    return data_dict
+
+def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="conformer",old_str="", new_str="",prompt_decoding=False):
     # uid = "1272_128104_000003_000001"
     duration_preditor_path= duration_path_dict['libritts']
     sid = uid.split('_')[0]
@@ -643,15 +715,18 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
     spk2xvector = torch.load(xv_path) 
     spemd = spk2xvector[sid]
     full_origin_str,wav_path = read_data(uid, prefix)
-    print(full_origin_str)
     if not old_str:
         old_str = full_origin_str
     if not new_str:
         new_str = input("input the new string:")
+    if prompt_decoding:
+        print(new_str)
+        return prompt_decoding_fn(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path,sid=spemd)
+    print(full_origin_str)
     results_dict, old_span = plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path,sid=spemd)
     return results_dict
 
-def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str=""):
+def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str="",prompt_decoding=False):
     # sid = uid.split('_')[0]
     # duration_preditor_path = duration_path_dict['vctk']
     # xv_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'
@@ -660,11 +735,14 @@ def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_s
     duration_preditor_path = duration_path_dict['ljspeech']
     spemd = None
     full_origin_str,wav_path = read_data(uid, prefix)
-    print(full_origin_str)
     if not old_str:
         old_str = full_origin_str
     if not new_str:
         new_str = input("input the new string:")
+    if prompt_decoding:
+        print(new_str)
+        return prompt_decoding_fn(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path,sid=spemd)
+    print(full_origin_str)
     results_dict, old_span = plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path,sid=spemd)
     return results_dict
 
@@ -758,6 +836,9 @@ def test_cremad(uid, vocoder, model_name="conformer", old_str="", new_str=""):
 
 
 if __name__ == "__main__":
+
+    fs2_model_path = '/mnt/home/v_baihe/projects/espnet/egs2/libritts/tts1/exp/tts_train_gst+xvector_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth'
+    fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
     # vctk_vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
     # uid = "1090_ITS_HAP_XX"
     # model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
@@ -771,25 +852,19 @@ if __name__ == "__main__":
     # new_str = "I think I've seen this [MASK]"
     # data_dict = test_cremad(uid,vocoder,model_name,new_str)
 
-    vocoder = load_vocoder('ljspeech_parallel_wavegan.v1.long')
+    # vocoder = load_vocoder('ljspeech_parallel_wavegan.v1.long')
     # model_name="/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/exp/conformer"
     # uid = "LJ049-0010"
     # prefix='/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/dump/raw/dev/'
-    # new_str = "who responded to the happy event with dispatch."
+    # new_str="who responded to the unexpected question with dispatch."
     # data_dict = test_ljspeech(uid,vocoder, prefix, model_name, new_str=new_str)
-    uid = "LJ050-0045"
-    model_name="/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/exp/ablation_transformer"
-    prefix='/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/dump/raw/eval1/'
-    new_str = "and of the [MASK] Projects Agency of the Department of Defense,"
-    data_dict = plot_ljspeech(uid,prefix=prefix,model_name=model_name,new_str=new_str)
 
-    # vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    # model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
-    # uid = "p243_313"
-    # # prefix='/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/dump/raw/tr_no_dev/'
-    # prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/tr_no_dev/'
-    # new_str = "for that [MASK] given"
-    # data_dict = test_vctk(uid,vocoder,prefix,model_name,new_str=new_str)
+    vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
+    model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
+    uid = 'p240_016'
+    new_str="The Norsemen considered the rainbow as a bridge over which the gods passed from earth to their home in the sky. Take a look at these pages for crooked creek drive."
+    prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/tr_no_dev/'
+    data_dict = test_vctk(uid,vocoder,prefix,model_name,new_str=new_str)
 
     # libritts_vocoder = load_vocoder('libritts_parallel_wavegan.v1')
     # model_name="/mnt/home/v_baihe/projects/espnet/egs2/libritts/sedit/exp/conformer"

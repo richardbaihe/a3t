@@ -505,7 +505,8 @@ class MLMTask(AbsTask):
         assert len(iter_options.data_path_and_name_and_type) > 0, len(
             iter_options.data_path_and_name_and_type
         )
-        dataset_training_portion = {'libritts':0.3, "librispeech":0.3, "librilight":0.3,"vctk":0.1,"librilight_sub":0.3}
+        # dataset_training_portion = {'libritts':0.3, "librispeech":0.3, "librilight":0.3,"vctk":0.1,"librilight_sub":0.3}
+        dataset_training_portion = {'libritts':0.6, "librispeech":0.2, "librilight":0,"vctk":0.2,"librilight_sub":0}
         dataset_args = []
 
         # 1. Sanity check
@@ -561,7 +562,7 @@ class MLMTask(AbsTask):
                     max_cache_size=iter_options.max_cache_size,
                 ),
             )
-            for k in dataset_data_path_and_name_and_type.keys()
+            for k in dataset_data_path_and_name_and_type.keys() if dataset_num_iters_per_epoch[k]!=0
         }
         
         # if 'librilight' in build_funcs.keys():
