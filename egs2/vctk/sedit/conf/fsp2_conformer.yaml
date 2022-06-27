@@ -1,0 +1,83 @@
+batch_type: numel
+batch_bins: 3000000
+sort_batch: descending
+sort_in_batch: descending
+num_iters_per_epoch: 800
+accum_grad: 1
+grad_clip: 1.0
+grad_noise: false 
+max_epoch: 1500
+train_dtype: float32
+num_workers: 1
+seed: 0   
+# batch_size: 48
+
+# The initialization method for model parameters
+init: xavier_uniform
+best_model_criterion:
+-   - valid
+    - loss
+    - min
+-   - train
+    - loss
+    - min
+keep_nbest_models: 5
+num_att_plot: 0
+
+encoder: conformer
+encoder_conf:
+    input_layer: sega_mlm
+    pre_speech_layer: 0
+    cnn_module_kernel: 7
+    attention_dim: 384
+    attention_heads: 2
+    linear_units: 1536
+    num_blocks: 4
+    dropout_rate: 0.2
+    positional_dropout_rate: 0.2
+    attention_dropout_rate: 0.2
+    normalize_before: true
+    macaron_style: true
+    use_cnn_module: true 
+    selfattention_layer_type: rel_selfattn
+    activation_type: swish
+    pos_enc_layer_type: rel_pos
+    positionwise_layer_type: conv1d
+    positionwise_conv_kernel_size: 3
+
+decoder: conformer
+decoder_conf:
+    cnn_module_kernel: 31
+    attention_dim: 384
+    attention_heads: 2
+    linear_units: 1536
+    num_blocks: 4
+    dropout_rate: 0.2
+    positional_dropout_rate: 0.2
+    attention_dropout_rate: 0.2
+    macaron_style: true
+    use_cnn_module: true 
+    selfattention_layer_type: rel_selfattn
+    activation_type: swish
+    pos_enc_layer_type: rel_pos
+    positionwise_layer_type: conv1d
+    positionwise_conv_kernel_size: 3
+
+model_conf:
+    lsm_weight: 0.1
+    length_normalized_loss: false
+    masking_schema: phn_span
+    mean_phn_span: 8
+    mlm_prob: 0.8
+    dynamic_mlm_prob: false
+    postnet_layers: 5
+    postnet_filts: 5
+    postnet_chans: 256
+    
+optim: adam
+optim_conf:
+    lr: 1.0
+scheduler: noamlr
+scheduler_conf:
+    model_size: 384
+    warmup_steps: 4000
