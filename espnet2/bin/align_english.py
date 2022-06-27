@@ -12,10 +12,10 @@ from espnet2.text.phoneme_tokenizer import G2p_en
 
 g2p_tokenzier=G2p_en(no_space=True)
 
-PHONEME = '/mnt/home/jiahong/tools/english2phoneme/phoneme'
-MODEL_DIR = '/mnt/home/jiahong/tools/alignment/aligner/english'
-HVITE = '/mnt/home/jiahong/tools/htk/HTKTools/HVite'
-HCOPY = '/mnt/home/jiahong/tools/htk/HTKTools/HCopy'
+PHONEME = '{PATH2thisproject}/a3t/tools/english2phoneme/phoneme'
+MODEL_DIR = '{PATH2thisproject}/a3t/tools/alignment/aligner/english'
+HVITE = '{PATH2thisproject}/a3t/tools/htk/HTKTools/HVite'
+HCOPY = '{PATH2thisproject}/a3t/tools/htk/HTKTools/HCopy'
 
 def prep_txt(line, tmpbase, dictfile):
  

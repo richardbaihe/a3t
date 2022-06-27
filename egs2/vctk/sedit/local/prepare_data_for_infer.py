@@ -29,9 +29,9 @@ dataset = ["p279_401","p314_418", "p265_347", "p277_456", "p266_416", "p304_417"
 fs2_model_path = duration_path_dict['vctk']
 fs2_model, processor = get_fs2_model(fs2_model_path)
 vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
-prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/eval1/'
-xv_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'
+model_name="{PATH2thisproject}/a3t/egs2/vctk/sedit/exp/conformer"
+prefix = '{PATH2thisproject}/a3t/egs2/vctk/sedit/data/eval1/'
+xv_path = '{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'
 spk2xvector = torch.load(xv_path)
 
 decode_conf = {}
@@ -40,7 +40,7 @@ decode_conf.update(alpha=1.0)
 cfg = decode_conf
 sr = fs2_model.feats_extract.fs
 window_length = fs2_model.feats_extract.hop_length
-path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/mcd/vctk'
+path = '{PATH2thisproject}/a3t/aggregate_output/mcd/vctk'
 for uid in tqdm(dataset):
     spk_id = uid.split("_")[0]
     full_origin_str,wav_path = read_data(uid, prefix)

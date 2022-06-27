@@ -24,11 +24,12 @@ import random
 from ipywidgets import widgets
 import IPython.display as ipd
 
+# the following checkpoints are download from ESPNET
 duration_path_dict = {
-    "ljspeech":"/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
-    "vctk": "/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
-    "vctk_unseen":"/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/tts_train_fs2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth",
-    "libritts":"/mnt/home/v_baihe/projects/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss/train.loss.ave_5best.pth"
+    "ljspeech":"{PATH2espnet}/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "vctk": "{PATH2espnet}/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "vctk_unseen":"{PATH2espnet}/espnet/egs2/vctk/tts1/exp/tts_train_fs2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth",
+    "libritts":"{PATH2espnet}/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss/train.loss.ave_5best.pth"
 }
 
 torch.use_deterministic_algorithms(True)
@@ -40,8 +41,8 @@ np.random.seed(0)
 # default loading './exp/{}/train.loss.best.pth'
 # default loading wavegan vocoder trained with libritts
 
-PHONEME = '/mnt/home/jiahong/tools/english2phoneme/phoneme'
-MODEL_DIR = '/mnt/home/jiahong/tools/alignment/aligner/english'
+PHONEME = '{PATH2thisproject}/a3t/tools/english2phoneme/phoneme'
+MODEL_DIR = '{PATH2thisproject}/a3t/tools/alignment/aligner/english'
 
 def plot_data(data, figsize=(16, 4), span_boundary=None, titles=None):
     fig, axes = plt.subplots(1, len(data), figsize=figsize)
@@ -111,41 +112,6 @@ def merge_two_data(uid1,uid2, prefix1,prefix2=None, sr=24000):
     with open(os.path.join(new_prefix,'mfa_end'),'w') as f_out:
         f_out.write(uid2+' '+" ".join([str(i) for i in new_mfa_end]))
 
-def read_emotion_data(speaker_id, text_tag, emo_tag, level_tag):
-    # The sentences were presented using different emotion (in parentheses is the three letter code used in the third part of the filename):
-
-    # - Anger (ANG)
-    # - Disgust (DIS)
-    # - Fear (FEA)
-    # - Happy/Joy (HAP)
-    # - Neutral (NEU)
-    # - Sad (SAD)
-
-    # and emotion level (in parentheses is the two letter code used in the fourth part of the filename):
-
-    # - Low (LO)
-    # - Medium (MD)
-    # - High (HI)
-    # - Unspecified (XX)
-    text_dict = {
-        "IEO": "It's eleven o'clock",
-        "TIE": "That is exactly what happened",
-        "IOM": "I'm on my way to the meeting",
-        "IWW": "I wonder what this is about" ,
-        "TAI": "The airplane is almost full",
-        "MTI": "Maybe tomorrow it will be cold",
-        "IWL": "I would like a new alarm clock",
-        "ITH": "I think I have a doctor's appointment",
-        "DFA": "Don't forget a jacket",
-        "ITS": "I think I've seen this before",
-        "TSI": "The surface is slick",
-        "WSI": "We'll stop in a couple of minutes"
-    }
-    filename = "/mnt/scratch/jiahong/emotion_datasets/CREMA-D/AudioWAV/"+ '_'.join([speaker_id, text_tag, emo_tag, level_tag ])+'.wav'
-    return text_dict[text_tag], filename
-    
-
-
 def display_audios(data_dict, sr=24000):
     audio_widgets = []
     for key,audio in data_dict.items():
@@ -187,7 +153,7 @@ def get_tts_audio(prompt_spembds, prompt_speech, target_text, tts_model, process
     tts_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return tts_wav
 
-def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt', return_mel=False):
+def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt', return_mel=False):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -214,7 +180,7 @@ def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='/mnt/
     baseline1_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return baseline1_wav
 
-def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_path='/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'):
+def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -251,7 +217,7 @@ def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_p
     baseline2_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return baseline2_wav
 
-def get_baseline3(uid, prefix,vocoder, new_str, model, processor,xv_path='/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'):
+def get_baseline3(uid, prefix,vocoder, new_str, model, processor,xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -421,8 +387,8 @@ def get_mel_span(uid, model_name,prefix):
 def get_fs2_model(model_name):
     model, config = TTSTask.build_model_from_file(model_file=model_name)
     processor = TTSTask.build_preprocess_fn(config, train=False)
-    # model = torch.load('/mnt/home/v_baihe/projects/espnet/egs2/{}/tts1/exp/fs2_model.pt'.format(model_name))
-    # processor = torch.load('/mnt/home/v_baihe/projects/espnet/egs2/{}/tts1/exp/fs2_processor.pt'.format(model_name))
+    # model = torch.load('{PATH2thisproject}/a3t/egs2/{}/tts1/exp/fs2_model.pt'.format(model_name))
+    # processor = torch.load('{PATH2thisproject}/a3t/egs2/{}/tts1/exp/fs2_processor.pt'.format(model_name))
     return model, processor
 
 def duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor,wav_org, sid=None):
@@ -740,7 +706,7 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
     # uid = "1272_128104_000003_000001"
     duration_preditor_path= duration_path_dict['libritts']
     sid = uid.split('_')[0]
-    xv_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/libritts_spk2xvector.pt'
+    xv_path = '{PATH2thisproject}/a3t/aggregate_output/libritts_spk2xvector.pt'
     spk2xvector = torch.load(xv_path) 
     spemd = spk2xvector[sid]
     full_origin_str,wav_path = read_data(uid, prefix)
@@ -758,7 +724,7 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
 def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str="",prompt_decoding=False,dynamic_eval=(0,0)):
     # sid = uid.split('_')[0]
     # duration_preditor_path = duration_path_dict['vctk']
-    # xv_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'
+    # xv_path = '{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'
     # spk2xvector = torch.load(xv_path) 
     # spemd = spk2xvector[sid]
     duration_preditor_path = duration_path_dict['ljspeech']
@@ -835,7 +801,7 @@ def plot_vctk(uid, vocoder=None, prefix='dump/raw/dev', model_name="conformer", 
                                                             sid=spemd
                                                             )
     
-    fs2_model_path = "/mnt/home/v_baihe/projects/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    fs2_model_path = "{PATH2thisproject}/a3t/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
     tts_feat = get_baseline1(uid, prefix,vocoder, old_str, fs2_model, fs2_processor,return_mel=True)
     results_dict = {
@@ -868,7 +834,7 @@ def plot_ljspeech(uid, vocoder=None, prefix='dump/raw/dev', model_name="conforme
                                                             sid=spemd
                                                             )
     
-    fs2_model_path = "/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    fs2_model_path = "{PATH2thisproject}/a3t/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
     tts_feat = get_baseline1(uid, prefix,vocoder, old_str, fs2_model, fs2_processor,return_mel=True)
     results_dict = {
@@ -892,55 +858,37 @@ def test_ljspeech(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", o
     results_dict, old_span = plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path)
     return results_dict
 
-def test_cremad(uid, vocoder, model_name="conformer", old_str="", new_str=""):
-    duration_preditor_path = duration_path_dict['ljspeech']
-    speaker_id, text_tag,emo_tag,level_tag=uid.split("_")
-    full_origin_str,wav_path = read_emotion_data(speaker_id, text_tag, emo_tag, level_tag)
-    print(full_origin_str)
-    if not old_str:
-        old_str = full_origin_str
-    if not new_str:
-        new_str = input("input the new string:")
-    results_dict, old_span = plot_mel_and_vocode_wav(model_name, wav_path,full_origin_str, old_str, new_str,vocoder,duration_preditor_path)
-    return results_dict
-
 
 if __name__ == "__main__":
 
-    fs2_model_path = '/mnt/home/v_baihe/projects/espnet/egs2/libritts/tts1/exp/tts_train_gst+xvector_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth'
+    fs2_model_path = '{PATH2thisproject}/a3t/egs2/libritts/tts1/exp/tts_train_gst+xvector_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth'
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
-    # vctk_vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    # uid = "1090_ITS_HAP_XX"
-    # model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
-    # new_str = "I think I've seen [MASK]"
-    # data_dict = test_cremad(uid,vctk_vocoder, model_name, new_str=new_str)
-    # display_audios(data_dict,sr=24000)
 
     # vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    # model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
+    # model_name="{PATH2thisproject}/a3t/egs2/vctk/sedit/exp/conformer"
     # uid = "1090_ITS_SAD_XX"
     # new_str = "I think I've seen this [MASK]"
     # data_dict = test_cremad(uid,vocoder,model_name,new_str)
 
     # vocoder = load_vocoder('ljspeech_parallel_wavegan.v1.long')
-    # model_name="/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/exp/conformer"
+    # model_name="{PATH2thisproject}/a3t/egs2/ljspeech/sedit/exp/conformer"
     # uid = "LJ049-0010"
-    # prefix='/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/dump/raw/dev/'
+    # prefix='{PATH2thisproject}/a3t/egs2/ljspeech/sedit/dump/raw/dev/'
     # new_str="who responded to the unexpected question with dispatch."
     # data_dict = test_ljspeech(uid,vocoder, prefix, model_name, new_str=new_str)
 
     vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
+    model_name="{PATH2thisproject}/a3t/egs2/vctk/sedit/exp/conformer"
     uid = 'p240_016'
     new_str="The Norsemen considered the rainbow as a bridge over which the gods passed from earth to their home in the sky. Take a look at these pages for crooked creek drive."
-    prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/tr_no_dev/'
+    prefix = '{PATH2thisproject}/a3t/egs2/vctk/sedit/data/tr_no_dev/'
     data_dict = test_vctk(uid,vocoder,prefix,model_name,new_str=new_str)
 
     # libritts_vocoder = load_vocoder('libritts_parallel_wavegan.v1')
-    # model_name="/mnt/home/v_baihe/projects/espnet/egs2/libritts/sedit/exp/conformer"
+    # model_name="{PATH2thisproject}/a3t/egs2/libritts/sedit/exp/conformer"
     # uid1 = '1089_134686_000007_000005'
     # uid2 = '1089_134686_000007_000003'
-    # prefix='/mnt/home/v_baihe/projects/espnet/egs2/libritts/sedit/dump/raw/test-clean/'
+    # prefix='{PATH2thisproject}/a3t/egs2/libritts/sedit/dump/raw/test-clean/'
     # merge_two_data(uid1,uid2,prefix)
     # new_str="[MASK] What music?"
     # data_dict = test_libritts(uid2,libritts_vocoder,os.path.join(prefix,'merged'),model_name,new_str=new_str)

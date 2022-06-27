@@ -1,6 +1,6 @@
-# $\text{A}^3\text{T}$: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing
+# $\text{A}^3\text{T}$: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing 
 
-
+## Note: I haven't but going to test this repo in a new development environment when I have time, to giving more details of the setup process. Before that, I am sorry but you need to debug by yourself if errors occurs (most of them should be "path not exists, xxx not installed"). 
 Code for paper [$\text{A}^3\text{T}$: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing](https://arxiv.org/abs/2203.09690). Load our checkpoints from [HuggingFace Model Hub](https://huggingface.co/richardbaihe).
 
 ## 0. Setup
@@ -8,29 +8,23 @@ This repos is forked from [ESPnet](https://github.com/espnet/espnet), please set
 
 Hint: Once you can run ESPnet's TTS example, there should be no issue to run our code.
 
-## 1. Downloadable Checkpoints:
-- LJSpeech Pre-trained Model
-- VCTK Pre-trained Model
-- LibriTTS Pre-trained Model
+Noting that our forced aligner and phoneme tokenizer are from [HTK](https://htk.eng.cam.ac.uk). 
 
-## 2. Inference with speech editing and new speaker TTS
+
+Our codebase support the training and evaluation for LJSpeech, VCTK, and LibriTTS. Currently, we only take the VCTK as an example in the README.
+
+## 1. Data preprocess
+After setup ESPnet environment, go to the folder `egs2/VCTK/sedit`, and run `mlm.sh`'s step 1-5.
+
+
+## 2. Inference with speech editing or new speaker TTS
+We provide a python script for vctk speech editing and prompt-based TTS decoding `bin/sedit_inference.py`, where you can find an example in the `main` function.
+
 
 ## 3. Train you own model
-
-1. ProjectPath: `espnet/egs2/vctk/sedit`
-
-2. Data path:
-
-   I would suggest to link the processed data from my project path `/mnt/home/v_baihe/projects/espnet/egs2/an4/sedit/dump` and `/mnt/home/v_baihe/projects/espnet/egs2/an4/sedit/data`
-
-   Otherwise, run `./data_prepare.sh` under ProjectPath.
-
-   And then run `./local/submit_align_job.sh` under ProjectPath.
-
-   And then run `mlm.sh`'s stage 5 and stage 6 with `run.sh`
-
-3. Training:
-
-   `mlm.sh`'s stage 7 is training, which can be done by modifiying `run.sh`
+Now, go to this path: `egs2/VCTK/sedit`.
+After finished step 1-5 in `mlm.sh`, run `../../../espnet2/bin/align_english.py`
+Then, run step 6 of `mlm.sh` to prepare features for training.
+Then run step 7 of `mlm.sh` for training.
 
    
