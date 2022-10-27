@@ -30,4 +30,31 @@ After finished step 1-5 in `mlm.sh`, run `../../../espnet2/bin/align_english.py`
 Then, run step 6 of `mlm.sh` to prepare features for training.
 Then run step 7 of `mlm.sh` for training.
 
-   
+
+## To cite our work:
+```
+@InProceedings{pmlr-v162-bai22d,
+  title =   {{A}$^3${T}: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing},
+  author =       {Bai, He and Zheng, Renjie and Chen, Junkun and Ma, Mingbo and Li, Xintong and Huang, Liang},
+  booktitle =   {Proceedings of the 39th International Conference on Machine Learning},
+  pages =   {1399--1411},
+  year =   {2022},
+  volume =   {162},
+  series =   {Proceedings of Machine Learning Research},
+  month =   {17--23 Jul},
+  publisher =    {PMLR},
+  pdf =   {https://proceedings.mlr.press/v162/bai22d/bai22d.pdf},
+  url =   {https://proceedings.mlr.press/v162/bai22d.html},
+}
+```
+```
+@inproceedings{bai2021segatron,
+  title={Segatron: Segment-aware transformer for language modeling and understanding},
+  author={Bai, He and Shi, Peng and Lin, Jimmy and Xie, Yuqing and Tan, Luchen and Xiong, Kun and Gao, Wen and Li, Ming},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={35},
+  number={14},
+  pages={12526--12534},
+  year={2021}
+}
+```
