@@ -35,12 +35,12 @@ which sox
 First maintain a list of speakers that you want to exclude from training,
 then exclude them from all .scp.
 
-## Statistics of the training features lengths
+## Build vocabulary and Statistics of the training features lengths
 ```
-./run.sh --stage 5 --stop_stage 6
+./run.sh --stage 5 --stop_stage 7 --mlm_config conf/fsp2_conformer.yaml --mlm_exp exp/a3t 
 ```
 
 # 3. Training
 ```
-./run.sh --stage 6 --stop_stage 7
+./run.sh --stage 7 --stop_stage 8 --mlm_config conf/fsp2_conformer.yaml --mlm_exp exp/a3t 
 ```
