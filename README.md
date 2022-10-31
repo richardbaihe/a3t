@@ -2,6 +2,8 @@
 
 Code for [paper](https://arxiv.org/abs/2203.09690) $\text{A}^3\text{T}$: [Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing. Download our checkpoints from [HuggingFace Model Hub](https://huggingface.co/richardbaihe).
 
+
+
 :fire: This work has been implemented by the [PaddleSpeech](https://github.com/PaddlePaddle/PaddleSpeech/tree/develop/examples/vctk/ernie_sat), where they extend $\text{A}^3\text{T}$ to a multilingual version. 
 
 ## Note: If you just want to learn how did we implement the pre-training model, please take a look at this class [`ESPnetMLMEncAsDecoderModel`](https://github.com/richardbaihe/a3t/blob/aab2d836173371ff3aebcb0fb4ed1480e4c8a5ce/espnet2/tts/sedit/sedit_model.py#L348).
@@ -9,7 +11,14 @@ Code for [paper](https://arxiv.org/abs/2203.09690) $\text{A}^3\text{T}$: [Alignm
 ## 0. Setup
 This repos is forked from [ESPnet](https://github.com/espnet/espnet), please setup your environment according to ESPnet's instruction.
 
-Hint: Once you can run ESPnet's TTS example, there should be no issue to run our code.
+An alternative solution is to use our docker image:
+```
+docker pull richardbaihe/pytorch:a3t
+```
+And inside this docker container, use
+```
+conda activate espnet
+```
 
 Noting that our forced aligner and phoneme tokenizer are from [HTK](https://htk.eng.cam.ac.uk). 
 
