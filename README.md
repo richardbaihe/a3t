@@ -17,7 +17,7 @@ Noting that our forced aligner and phoneme tokenizer are from [HTK](https://htk.
 Our codebase support the training and evaluation for LJSpeech, VCTK, and LibriTTS. Currently, we only take the VCTK as an example in the README.
 
 ## 1. Data preprocess
-After setup ESPnet environment, go to the folder `egs2/VCTK/sedit`, and run `mlm.sh`'s step 1-5.
+After setup ESPnet environment, Please follow [`egs2/vctk/sedit/README.md`](https://github.com/richardbaihe/a3t/blob/dev_richard/egs2/vctk/sedit/README.md).
 
 
 ## 2. Inference with speech editing or new speaker TTS
@@ -25,10 +25,7 @@ We provide a python script for vctk speech editing and prompt-based TTS decoding
 
 
 ## 3. Train you own model
-Now, go to this path: `egs2/VCTK/sedit`.
-After finished step 1-5 in `mlm.sh`, run `../../../espnet2/bin/align_english.py`
-Then, run step 6 of `mlm.sh` to prepare features for training.
-Then run step 7 of `mlm.sh` for training.
+Please follow [`egs2/vctk/sedit/README.md`](https://github.com/richardbaihe/a3t/blob/dev_richard/egs2/vctk/sedit/README.md).
 
 
 ## To cite our work:
