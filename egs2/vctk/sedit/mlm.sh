@@ -21,9 +21,7 @@ min() {
   echo "${a}"
 }
 SECONDS=0
-data_base_path="/mnt/home/v_baihe/data"
-dataset_name="libritts"
-data_feat_path=${data_base_path}/feat_dir/${dataset_name}
+dataset_name="vctk"
 ndev_utt=100
 # General configuration
 stage=1              # Processes starts from the specified stage.

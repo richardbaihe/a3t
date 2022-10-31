@@ -5,35 +5,55 @@ set -e
 set -u
 set -o pipefail
 
-train_set=unseen_tr_no_dev
-valid_set=dev
-test_sets="unseen_dev unseen_eval1"
-
 nnodes=1
 ngpu=8
 fs=24000
 n_fft=2048
 n_shift=300
 win_length=1200
-start_stage=6
-stop_stage=7
-exp_name=
-train_config=conf/train.yaml
-inference_config=conf/decode.yaml
-
-# g2p=g2p_en # Include word separator
-g2p=g2p_en_no_space # Include no word separator
-
+start_stage=0
+stop_stage=1
+exp_name=dev
 
 opts=
-if [ "${fs}" -eq 22050 ]; then
+if [ "${fs}" -eq 48000 ]; then
     # To suppress recreation, specify wav format
     opts="--audio_format wav "
 else
     opts="--audio_format flac "
 fi
 
-. utils/parse_options.sh
+train_set=tr_no_dev
+valid_set=dev
+test_sets="dev eval1"
+
+train_config=conf/train.yaml
+inference_config=conf/decode.yaml
+
+# g2p=g2p_en # Include word separator
+g2p=g2p_en_no_space # Include no word separator
+
+# train_set=unseen_tr_no_dev
+# valid_set=dev
+# test_sets="unseen_dev unseen_eval1"
+
+
+# train_config=conf/train.yaml
+# inference_config=conf/decode.yaml
+
+# # g2p=g2p_en # Include word separator
+# g2p=g2p_en_no_space # Include no word separator
+
+
+# opts=
+# if [ "${fs}" -eq 22050 ]; then
+#     # To suppress recreation, specify wav format
+#     opts="--audio_format wav "
+# else
+#     opts="--audio_format flac "
+# fi
+
+# . utils/parse_options.sh
 
 ./mlm.sh \
     --lang en \

@@ -25,11 +25,12 @@ from ipywidgets import widgets
 import IPython.display as ipd
 
 # the following checkpoints are download from ESPNET
+PATH2thisproject = os.path.dirname(os.path.abspath(__file__))+'/../..'
 duration_path_dict = {
-    "ljspeech":"{PATH2espnet}/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
-    "vctk": "{PATH2espnet}/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
-    "vctk_unseen":"{PATH2espnet}/espnet/egs2/vctk/tts1/exp/tts_train_fs2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth",
-    "libritts":"{PATH2espnet}/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss/train.loss.ave_5best.pth"
+    "ljspeech":"{PATH2thisproject}/espnet/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "vctk": "{PATH2thisproject}/espnet/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
+    "vctk_unseen":"{PATH2thisproject}/espnet/egs2/vctk/tts1/exp/tts_train_fs2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth",
+    "libritts":"{PATH2thisproject}/espnet/egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss/train.loss.ave_5best.pth"
 }
 
 torch.use_deterministic_algorithms(True)
@@ -40,10 +41,8 @@ np.random.seed(0)
 # default loading fs2 duration preditor trained with libritts
 # default loading './exp/{}/train.loss.best.pth'
 # default loading wavegan vocoder trained with libritts
-
-PHONEME = '{PATH2thisproject}/a3t/tools/english2phoneme/phoneme'
-MODEL_DIR = '{PATH2thisproject}/a3t/tools/alignment/aligner/english'
-
+PHONEME = f'{PATH2thisproject}/tools/english2phoneme/phoneme'
+MODEL_DIR = f'{PATH2thisproject}/tools/alignment/aligner/english'
 def plot_data(data, figsize=(16, 4), span_boundary=None, titles=None):
     fig, axes = plt.subplots(1, len(data), figsize=figsize)
     for i in range(len(data)):

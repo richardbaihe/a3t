@@ -11,11 +11,11 @@ import multiprocessing as mp
 from espnet2.text.phoneme_tokenizer import G2p_en
 
 g2p_tokenzier=G2p_en(no_space=True)
-
-PHONEME = '{PATH2thisproject}/a3t/tools/english2phoneme/phoneme'
-MODEL_DIR = '{PATH2thisproject}/a3t/tools/alignment/aligner/english'
-HVITE = '{PATH2thisproject}/a3t/tools/htk/HTKTools/HVite'
-HCOPY = '{PATH2thisproject}/a3t/tools/htk/HTKTools/HCopy'
+PATH2thisproject = os.path.dirname(os.path.abspath(__file__))+'/../..'
+PHONEME = f'{PATH2thisproject}/tools/english2phoneme/phoneme'
+MODEL_DIR = f'{PATH2thisproject}/tools/alignment/aligner/english'
+HVITE = f'{PATH2thisproject}/tools/HTKTools/HVite'
+HCOPY = f'{PATH2thisproject}/tools/HTKTools/HCopy'
 
 def prep_txt(line, tmpbase, dictfile):
  
@@ -27,7 +27,7 @@ def prep_txt(line, tmpbase, dictfile):
     for wrd in line.split():
         if (wrd[-1] == '-'):
             wrd = wrd[:-1]
-        if (wrd[0] == "'"):
+        if len(wrd)>0 and (wrd[0] == "'"):
             wrd = wrd[1:]
         if wrd:
             words.append(wrd)
@@ -167,6 +167,7 @@ def alignment(wav_path, text_string):
     try:
         prep_txt(text_string, tmpbase, MODEL_DIR + '/dict')
     except:
+        print(wav_path)
         print('prep_txt error!')
         return None
 
@@ -176,6 +177,7 @@ def alignment(wav_path, text_string):
             txt = fid.readline()
         prep_mlf(txt, tmpbase)
     except:
+        print(wav_path)
         print('prep_mlf error!')
         return None
 
@@ -183,6 +185,7 @@ def alignment(wav_path, text_string):
     try:
         os.system(HCOPY + ' -C ' + MODEL_DIR + '/16000/config ' + tmpbase + '.wav' + ' ' + tmpbase + '.plp')
     except:
+        print(wav_path)
         print('HCopy error!')
         return None
 
@@ -190,6 +193,7 @@ def alignment(wav_path, text_string):
     try:
         os.system(HVITE + ' -a -m -t 10000.0 10000.0 100000.0 -I ' + tmpbase + '.mlf -H ' + MODEL_DIR + '/16000/macros -H ' + MODEL_DIR + '/16000/hmmdefs -i ' + tmpbase +  '.aligned '  + tmpbase + '.dict ' + MODEL_DIR + '/monophones ' + tmpbase + '.plp 2>&1 > /dev/null') 
     except:
+        print(wav_path)
         print('HVite error!')
         return None
 
