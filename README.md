@@ -4,7 +4,7 @@ Code for [paper](https://arxiv.org/abs/2203.09690) $\text{A}^3\text{T}$: [Alignm
 
 
 
-:fire: This work has been implemented by the [PaddleSpeech](https://github.com/PaddlePaddle/PaddleSpeech/tree/develop/examples/vctk/ernie_sat), where they extend $\text{A}^3\text{T}$ to a multilingual version. 
+:fire: This work has been implemented by [PaddleSpeech](https://github.com/PaddlePaddle/PaddleSpeech/tree/develop/examples/vctk/ernie_sat), where they extend $\text{A}^3\text{T}$ to a multilingual version. 
 
 ## Note: If you just want to learn how did we implement the pre-training model, please take a look at this class [`ESPnetMLMEncAsDecoderModel`](https://github.com/richardbaihe/a3t/blob/aab2d836173371ff3aebcb0fb4ed1480e4c8a5ce/espnet2/tts/sedit/sedit_model.py#L348).
 
@@ -20,10 +20,9 @@ And inside this docker container, use
 conda activate espnet
 ```
 
-Noting that our forced aligner and phoneme tokenizer are from [HTK](https://htk.eng.cam.ac.uk). 
+Our forced aligner and phoneme tokenizer are from [HTK](https://htk.eng.cam.ac.uk) and included in `tools` folder.
 
-
-Our codebase support the training and evaluation for LJSpeech, VCTK, and LibriTTS. Currently, we only take the VCTK as an example in the README.
+Our codebase support the training and evaluation of LJSpeech, VCTK, and LibriTTS. Here, we take the VCTK as an example in this README.
 
 ## 1. Data preprocess
 After setup ESPnet environment, Please follow [`egs2/vctk/sedit/README.md`](https://github.com/richardbaihe/a3t/blob/dev_richard/egs2/vctk/sedit/README.md).
