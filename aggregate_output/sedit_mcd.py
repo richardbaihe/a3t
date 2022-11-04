@@ -1,9 +1,20 @@
+import types
+import sys
+
+# Having trouble importing sentencepiece for some reason... 
+# Just mock it for now...
+sp = types.ModuleType("sentencepiece")
+sp.__spec__ = "spec"
+sys.modules["sentencepiece"] = sp
+
 import os
 from espnet2.bin.sedit_inference import *
 from espnet2.torch_utils.device_funcs import to_device
 import kaldiio
 import soundfile
 from tqdm import tqdm
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 set_all_random_seed(9999)
 def save_wav_to_path(wav_input, left_index,right_index, path, prefix, sr,uid):
@@ -24,7 +35,9 @@ def save_wav_to_path(wav_input, left_index,right_index, path, prefix, sr,uid):
     # soundfile.write(os.path.join(path+'22050', prefix,'unreplaced', uid+'.wav'), wav_unreplaced, 22050)
 
 def calculate_mcd(gt_path, pred_path, shiftms):
-    os.system("python /mnt/home/v_baihe/projects/espnet/utils/mcd_calculate.py --mcep_dim 80 --wavdir {} --gtwavdir {} --f0min 80 --f0max 7600 --shiftms {} --silenced 1".format(pred_path, gt_path, shiftms))
+    cmd = f"python {os.path.join(SCRIPT_DIR, '../utils/mcd_calculate.py')} --mcep_dim 80 --wavdir {pred_path} --gtwavdir {gt_path} --f0min 80 --f0max 7600 --shiftms {shiftms} --silenced 1"
+    print(cmd)
+    os.system(cmd)
 
 
 def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=True):
@@ -33,9 +46,9 @@ def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=
     fs2_model_path = duration_path_dict['vctk']
     fs2_model, processor = get_fs2_model(fs2_model_path)
     vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    model_name="/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/exp/conformer"
-    prefix = '/mnt/home/v_baihe/projects/espnet/egs2/vctk/sedit/data/eval1/'
-    xv_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/vctk_spk2xvector.pt'
+    model_name= os.path.join(SCRIPT_DIR, "../egs2/vctk/sedit/exp/conformer")
+    prefix = os.path.join(SCRIPT_DIR, '../egs2/vctk/sedit/dump/raw/eval1/')
+    xv_path = os.path.join(SCRIPT_DIR, 'vctk_spk2xvector.pt')
     spk2xvector = torch.load(xv_path)
 
     decode_conf = {}
@@ -68,7 +81,7 @@ def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=
             save_wav_to_path(ours_wav_full, left_index, right_index, path=path, prefix='baseline4', sr=sr, uid=uid)
         else:
             # sedit
-            if fs2_model.tts.spk_embed_dim is not None:
+            if False and fs2_model.tts.spk_embed_dim is not None:
                 spemd = spk2xvector[spk_id]
             else:
                 spemd = None
@@ -133,8 +146,8 @@ def decode_ljspeech(path, base1=True, base2=True, gt=True,base4=False,vocoder_ba
     fs2_model_path = duration_path_dict['ljspeech']
     fs2_model, processor = get_fs2_model(fs2_model_path)
     vocoder = load_vocoder('ljspeech_parallel_wavegan.v3')
-    model_name="/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/exp/conformer"
-    prefix = '/mnt/home/v_baihe/projects/espnet/egs2/ljspeech/sedit/data/eval1/'
+    model_name=os.path.join(SCRIPT_DIR, "../egs2/ljspeech/sedit/exp/conformer")
+    prefix = os.path.join(SCRIPT_DIR, '../egs2/ljspeech/sedit/data/eval1/')
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -222,26 +235,27 @@ def decode_ljspeech(path, base1=True, base2=True, gt=True,base4=False,vocoder_ba
     print('span_diff:{}'.format(span_diff/len(dataset)))
 
 if __name__ == "__main__":
-    output_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/mcd/ljspeech'
-    #decode_ljspeech(output_path, base1=True, base2=True, gt=False,base4=False,vocoder_base=False)
-    decode_ljspeech(output_path, base1=False, base2=False, gt=False,base4=True,vocoder_base=False, ablation_prefix=None)
-    decode_ljspeech(output_path, base1=False, base2=False, gt=False,base4=False,vocoder_base=False, ablation_prefix=None)
-    shiftms = 256
-    for wav_type in ['replaced']:
-        for method in ['sedit','baseline4']:
-            
-            pred_path =  os.path.join(output_path, method,wav_type)
-            gt_path = os.path.join(output_path, 'gt',wav_type)
-            print("{}_{}:".format(method, wav_type))
-            calculate_mcd(gt_path, pred_path, shiftms)
-
-    # output_path = '/mnt/home/v_baihe/projects/espnet/aggregate_output/mcd/vctk'
-    # #decode_vctk(output_path, base1=True, base2=True, gt=False,base4=False,vocoder_base=False)
-    # shiftms = 300
+    # output_path = '/private/home/mattle/a3t/aggregate_output/mcd/ljspeech'
+    # #decode_ljspeech(output_path, base1=True, base2=True, gt=False,base4=False,vocoder_base=False)
+    # decode_ljspeech(output_path, base1=False, base2=False, gt=False,base4=True,vocoder_base=False, ablation_prefix=None)
+    # decode_ljspeech(output_path, base1=False, base2=False, gt=False,base4=False,vocoder_base=False, ablation_prefix=None)
+    # shiftms = 256
     # for wav_type in ['replaced']:
-    #     # 'baseline1', 'baseline2', 'sedit',
-    #     for method in ['baseline4','vocoder']:
+    #     for method in ['sedit','baseline4']:
+            
     #         pred_path =  os.path.join(output_path, method,wav_type)
     #         gt_path = os.path.join(output_path, 'gt',wav_type)
     #         print("{}_{}:".format(method, wav_type))
     #         calculate_mcd(gt_path, pred_path, shiftms)
+
+    output_path = os.path.join(SCRIPT_DIR, 'mcd/vctk')
+    decode_vctk(output_path, base1=True, base2=True, gt=True,base4=False,vocoder_base=False)
+    shiftms = 300
+    for wav_type in ['replaced']:
+        # 'baseline1', 'baseline2', 'sedit',
+        # for method in ['baseline4','vocoder']:
+        for method in ["sedit"]:
+            pred_path =  os.path.join(output_path, method,wav_type)
+            gt_path = os.path.join(output_path, 'gt',wav_type)
+            print("{}_{}:".format(method, wav_type))
+            calculate_mcd(gt_path, pred_path, shiftms)
