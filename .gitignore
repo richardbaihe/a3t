@@ -84,4 +84,6 @@ output/
 *.npy
 TextGrid/
 hifigan/*.pth.tar
-aggregate_output/*
+*.wav
+aggregate_output/figures
+aggregate_output/results
