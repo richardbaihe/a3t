@@ -40,16 +40,42 @@ def calculate_mcd(gt_path, pred_path, shiftms):
     os.system(cmd)
 
 
-def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=True):
-    dataset = ["p279_401","p314_418", "p265_347", "p277_456", "p266_416", "p304_417", "p228_362","p334_418", "p227_393","p340_418","p288_404","p288_406","p268_402","p308_415","p341_403","p343_395","p243_392","p274_465","p269_396","p265_345","p306_349","p361_417","p259_473","p270_455","p318_418","p302_307","p336_415","p302_308","p237_342","p246_351"]
+def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=True,ablation_prefix=None, 
+                seen_or_unseen='seen'):
+    # # table
+    # dataset = ["p279_401","p314_418", "p265_347", "p277_456", "p266_416", "p304_417", "p228_362","p334_418", "p227_393","p340_418","p288_404","p288_406","p268_402","p308_415","p341_403","p343_395","p243_392","p274_465","p269_396","p265_345","p306_349","p361_417","p259_473","p270_455","p318_418","p302_307","p336_415","p302_308","p237_342","p246_351"]
 
     fs2_model_path = duration_path_dict['vctk']
     fs2_model, processor = get_fs2_model(fs2_model_path)
     vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    model_name= os.path.join(SCRIPT_DIR, "../egs2/vctk/sedit/exp/conformer")
-    prefix = os.path.join(SCRIPT_DIR, '../egs2/vctk/sedit/dump/raw/eval1/')
+    model_name= os.path.join(SCRIPT_DIR, '../egs2/vctk/sedit/exp/unseen_conformer')
+    prefix = os.path.join(SCRIPT_DIR, '../egs2/vctk/sedit/data/eval1/')
     xv_path = os.path.join(SCRIPT_DIR, 'vctk_spk2xvector.pt')
     spk2xvector = torch.load(xv_path)
+
+    if seen_or_unseen == 'unseen':
+        # unseen tts
+        dataset = [
+            'p228_367','p228_368','p228_369','p228_370','p228_371',
+            'p229_388','p229_389','p229_390','p229_391','p229_392',
+            'p230_413','p230_414','p230_415','p230_416','p230_417',
+            'p231_472','p231_473','p231_474','p231_475','p231_476',
+            'p232_411','p232_412','p232_413','p232_414','p232_415',
+            'p233_388','p233_389','p233_390','p233_391','p233_392',
+        ]
+    elif seen_or_unseen == 'seen':
+        # seen tts
+        dataset = [
+            'p361_420','p361_421','p361_422','p361_423','p361_424',
+            'p362_420','p362_421','p362_422','p362_423','p362_424',
+            'p363_419','p363_420','p363_421','p363_422','p363_423',
+            'p364_304','p364_305','p364_306','p364_309','p364_308',
+            'p374_420','p374_421','p374_422','p374_423','p374_424',
+            'p376_291','p376_292','p376_293','p376_294','p376_295',
+        ]
+    else:
+        raise NotImplementedError('unsupported value of seen_or_unseen')
+    prefix = f'{SCRIPT_DIR}/../egs2/vctk/sedit/dump/raw/dev/'
 
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
@@ -65,9 +91,15 @@ def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=
         wav_org, rate = librosa.load(wav_path, sr)
 
         token_list = full_origin_str.split()
-        split = len(token_list)//3
+        split = max(len(token_list)//3,1)
         new_str = " ".join(token_list[:split]+['[MASK]']+token_list[-split:])
-
+        if ablation_prefix:
+            input_feat,out_feat, span_tobe_replaced, old_span, new_span = decode_for_mcd(model_name.replace('unseen_conformer',ablation_prefix), wav_path, full_origin_str, new_str,fs2_model_path,mask_reconstruct=True)
+            ours_wav_full = vocoder(out_feat).detach().float().data.cpu().numpy()
+            left_index = int(new_span[0]*hop_length)
+            right_index = int(new_span[1]*hop_length)
+            save_wav_to_path(ours_wav_full, left_index, right_index, path=path, prefix=ablation_prefix, sr=sr, uid=uid)
+            continue
         if base4:
             # baseline4
             if fs2_model.tts.spk_embed_dim is not None:
@@ -81,7 +113,7 @@ def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=
             save_wav_to_path(ours_wav_full, left_index, right_index, path=path, prefix='baseline4', sr=sr, uid=uid)
         else:
             # sedit
-            if False and fs2_model.tts.spk_embed_dim is not None:
+            if fs2_model.tts.spk_embed_dim is not None:
                 spemd = spk2xvector[spk_id]
             else:
                 spemd = None
@@ -133,7 +165,7 @@ def decode_vctk(path, base1=True, base2=True, gt=True, base4=False,vocoder_base=
                 out_feat = output_dict["feat_gen"]
             out_feat = torch.cat([input_feat[:old_span[0]], out_feat[:-eos_duration], input_feat[old_span[1]:]])
             baseline2_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
-            
+
             masked_length = int(sum(durations)*hop_length)
             left_index = int(old_span[0]*hop_length)
             right_index = left_index+masked_length
@@ -248,13 +280,30 @@ if __name__ == "__main__":
     #         print("{}_{}:".format(method, wav_type))
     #         calculate_mcd(gt_path, pred_path, shiftms)
 
-    output_path = os.path.join(SCRIPT_DIR, 'mcd/vctk')
-    decode_vctk(output_path, base1=True, base2=True, gt=True,base4=False,vocoder_base=False)
+
+    # to reproduce our results in Table 3, which evaluates unseen_conformer with seen speakers and unseen speakers
+    # column 1: seen speakers
+    output_path = os.path.join(SCRIPT_DIR, 'mcd/vctk_unseen')
+    decode_vctk(output_path, base1=False, base2=False, gt=True,base4=False,vocoder_base=False,seen_or_unseen='seen')
+    decode_vctk(output_path, base1=False, base2=False, gt=False,base4=False,vocoder_base=False, ablation_prefix='unseen_conformer',seen_or_unseen='seen')
     shiftms = 300
     for wav_type in ['replaced']:
         # 'baseline1', 'baseline2', 'sedit',
         # for method in ['baseline4','vocoder']:
-        for method in ["sedit"]:
+        for method in ["unseen_conformer"]:
+            pred_path =  os.path.join(output_path, method,wav_type)
+            gt_path = os.path.join(output_path, 'gt',wav_type)
+            print("{}_{}:".format(method, wav_type))
+            calculate_mcd(gt_path, pred_path, shiftms)
+    # column 2: unseen speakers
+    output_path = os.path.join(SCRIPT_DIR, 'results/test')
+    decode_vctk(output_path, base1=False, base2=False, gt=True,base4=False,vocoder_base=False,seen_or_unseen='unseen')
+    decode_vctk(output_path, base1=False, base2=False, gt=False,base4=False,vocoder_base=False, ablation_prefix='unseen_conformer',seen_or_unseen='unseen')
+    shiftms = 300
+    for wav_type in ['replaced']:
+        # 'baseline1', 'baseline2', 'sedit',
+        # for method in ['baseline4','vocoder']:
+        for method in ["unseen_conformer"]:
             pred_path =  os.path.join(output_path, method,wav_type)
             gt_path = os.path.join(output_path, 'gt',wav_type)
             print("{}_{}:".format(method, wav_type))

@@ -31,6 +31,7 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 duration_path_dict = {
     "ljspeech":os.path.join(SCRIPT_DIR, "../../egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"),
     "vctk": os.path.join(SCRIPT_DIR, "../../egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"),
+    # "vctk": "/opt/conda/envs/espnet/lib/python3.8/site-packages/espnet_model_zoo/2b200ca53cf45d776d404c01a655f23e/exp/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth",
     "vctk_unseen":os.path.join(SCRIPT_DIR, "../../egs2/vctk/tts1/exp/tts_train_fs2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth"),
     "libritts":os.path.join(SCRIPT_DIR, "../../egs2/libritts/tts1/exp/kan-bayashi/libritts_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss/train.loss.ave_5best.pth"),
 }
@@ -156,7 +157,7 @@ def get_tts_audio(prompt_spembds, prompt_speech, target_text, tts_model, process
     tts_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return tts_wav
 
-def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt', return_mel=False):
+def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path=f'{SCRIPT_DIR}/../../aggregate_output/vctk_spk2xvector.pt', return_mel=False):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -183,7 +184,7 @@ def get_baseline1(uid, prefix,vocoder, new_str, model, processor, xv_path='{PATH
     baseline1_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return baseline1_wav
 
-def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'):
+def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_path=f'{SCRIPT_DIR}/../../aggregate_output/vctk_spk2xvector.pt'):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -220,7 +221,7 @@ def get_baseline2(uid, prefix,vocoder, new_str,target_str, model, processor,xv_p
     baseline2_wav = vocoder(out_feat).detach().float().data.cpu().numpy()
     return baseline2_wav
 
-def get_baseline3(uid, prefix,vocoder, new_str, model, processor,xv_path='{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'):
+def get_baseline3(uid, prefix,vocoder, new_str, model, processor,xv_path=f'{SCRIPT_DIR}/../../aggregate_output/vctk_spk2xvector.pt'):
     decode_conf = {}
     decode_conf.update(use_teacher_forcing=False)
     decode_conf.update(alpha=1.0)
@@ -390,8 +391,8 @@ def get_mel_span(uid, model_name,prefix):
 def get_fs2_model(model_name):
     model, config = TTSTask.build_model_from_file(model_file=model_name)
     processor = TTSTask.build_preprocess_fn(config, train=False)
-    # model = torch.load('{PATH2thisproject}/a3t/egs2/{}/tts1/exp/fs2_model.pt'.format(model_name))
-    # processor = torch.load('{PATH2thisproject}/a3t/egs2/{}/tts1/exp/fs2_processor.pt'.format(model_name))
+    # model = torch.load(f'{SCRIPT_DIR}/../../egs2/{model_name}/tts1/exp/fs2_model.pt')
+    # processor = torch.load(f'{SCRIPT_DIR}/../../egs2/{model_name}/tts1/exp/fs2_processor.pt')
     return model, processor
 
 def duration_predict(old_phns, fs, hop_length,fs2_model, fs2_processor,wav_org, sid=None):
@@ -709,7 +710,7 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
     # uid = "1272_128104_000003_000001"
     duration_preditor_path= duration_path_dict['libritts']
     sid = uid.split('_')[0]
-    xv_path = '{PATH2thisproject}/a3t/aggregate_output/libritts_spk2xvector.pt'
+    xv_path = f'{SCRIPT_DIR}/../../aggregate_output/libritts_spk2xvector.pt'
     spk2xvector = torch.load(xv_path) 
     spemd = spk2xvector[sid]
     full_origin_str,wav_path = read_data(uid, prefix)
@@ -727,7 +728,7 @@ def test_libritts(uid, vocoder, prefix='dump/raw/dev-clean/', model_name="confor
 def test_vctk(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", old_str="",new_str="",prompt_decoding=False,dynamic_eval=(0,0)):
     # sid = uid.split('_')[0]
     # duration_preditor_path = duration_path_dict['vctk']
-    # xv_path = '{PATH2thisproject}/a3t/aggregate_output/vctk_spk2xvector.pt'
+    # xv_path = f'{SCRIPT_DIR}/../../aggregate_output/vctk_spk2xvector.pt'
     # spk2xvector = torch.load(xv_path) 
     # spemd = spk2xvector[sid]
     duration_preditor_path = duration_path_dict['ljspeech']
@@ -804,7 +805,7 @@ def plot_vctk(uid, vocoder=None, prefix='dump/raw/dev', model_name="conformer", 
                                                             sid=spemd
                                                             )
     
-    fs2_model_path = "{PATH2thisproject}/a3t/egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    fs2_model_path = f'{SCRIPT_DIR}/../../egs2/vctk/tts1/exp/kan-bayashi/vctk_tts_train_gst+xvector_conformer_fastspeech2_transformer_teacher_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth'
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
     tts_feat = get_baseline1(uid, prefix,vocoder, old_str, fs2_model, fs2_processor,return_mel=True)
     results_dict = {
@@ -837,7 +838,7 @@ def plot_ljspeech(uid, vocoder=None, prefix='dump/raw/dev', model_name="conforme
                                                             sid=spemd
                                                             )
     
-    fs2_model_path = "{PATH2thisproject}/a3t/egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth"
+    fs2_model_path = f'{SCRIPT_DIR}/../../egs2/ljspeech/tts1/exp/kan-bayashi/ljspeech_tts_train_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space_train.loss.ave/train.loss.ave_5best.pth'
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
     tts_feat = get_baseline1(uid, prefix,vocoder, old_str, fs2_model, fs2_processor,return_mel=True)
     results_dict = {
@@ -864,34 +865,34 @@ def test_ljspeech(uid, vocoder, prefix='dump/raw/dev', model_name="conformer", o
 
 if __name__ == "__main__":
 
-    fs2_model_path = '{PATH2thisproject}/a3t/egs2/libritts/tts1/exp/tts_train_gst+xvector_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth'
+    fs2_model_path = f'{SCRIPT_DIR}/../../egs2/libritts/tts1/exp/tts_train_gst+xvector_conformer_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.ave_5best.pth'
     fs2_model, fs2_processor = get_fs2_model(fs2_model_path)
 
     # vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    # model_name="{PATH2thisproject}/a3t/egs2/vctk/sedit/exp/conformer"
+    # model_name=f'{SCRIPT_DIR}/../../egs2/vctk/sedit/exp/conformer'
     # uid = "1090_ITS_SAD_XX"
     # new_str = "I think I've seen this [MASK]"
     # data_dict = test_cremad(uid,vocoder,model_name,new_str)
 
     # vocoder = load_vocoder('ljspeech_parallel_wavegan.v1.long')
-    # model_name="{PATH2thisproject}/a3t/egs2/ljspeech/sedit/exp/conformer"
+    # model_name=f'{SCRIPT_DIR}/../../egs2/ljspeech/sedit/exp/conformer'
     # uid = "LJ049-0010"
-    # prefix='{PATH2thisproject}/a3t/egs2/ljspeech/sedit/dump/raw/dev/'
+    # prefix=f'{SCRIPT_DIR}/../../egs2/ljspeech/sedit/dump/raw/dev/'
     # new_str="who responded to the unexpected question with dispatch."
     # data_dict = test_ljspeech(uid,vocoder, prefix, model_name, new_str=new_str)
 
     vocoder = load_vocoder('vctk_parallel_wavegan.v1.long')
-    model_name="{PATH2thisproject}/a3t/egs2/vctk/sedit/exp/conformer"
+    model_name=f'{SCRIPT_DIR}/../../egs2/vctk/sedit/exp/conformer'
     uid = 'p240_016'
     new_str="The Norsemen considered the rainbow as a bridge over which the gods passed from earth to their home in the sky. Take a look at these pages for crooked creek drive."
-    prefix = '{PATH2thisproject}/a3t/egs2/vctk/sedit/data/tr_no_dev/'
+    prefix = f'{SCRIPT_DIR}/../../egs2/vctk/sedit/data/tr_no_dev/'
     data_dict = test_vctk(uid,vocoder,prefix,model_name,new_str=new_str)
 
     # libritts_vocoder = load_vocoder('libritts_parallel_wavegan.v1')
-    # model_name="{PATH2thisproject}/a3t/egs2/libritts/sedit/exp/conformer"
+    # model_name=f'{SCRIPT_DIR}/../../egs2/libritts/sedit/exp/conformer'
     # uid1 = '1089_134686_000007_000005'
     # uid2 = '1089_134686_000007_000003'
-    # prefix='{PATH2thisproject}/a3t/egs2/libritts/sedit/dump/raw/test-clean/'
+    # prefix=f'{SCRIPT_DIR}/../../egs2/libritts/sedit/dump/raw/test-clean/'
     # merge_two_data(uid1,uid2,prefix)
     # new_str="[MASK] What music?"
     # data_dict = test_libritts(uid2,libritts_vocoder,os.path.join(prefix,'merged'),model_name,new_str=new_str)
