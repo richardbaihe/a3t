@@ -1,6 +1,6 @@
 # $\text{A}^3\text{T}$: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing 
 
-Code for [paper](https://arxiv.org/abs/2203.09690) $\text{A}^3\text{T}$: [Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing. 
+Code for [paper](https://arxiv.org/abs/2203.09690) $\text{A}^3\text{T}$: Alignment-Aware Acoustic and Text Pretraining for Speech Synthesis and Editing. 
 
 Checkpoints: [HuggingFace Model Hub](https://huggingface.co/richardbaihe).
 
