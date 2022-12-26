@@ -30,9 +30,7 @@ Our codebase support the training and evaluation of LJSpeech, VCTK, and LibriTTS
 
 Our vocoder is from https://github.com/kan-bayashi/ParallelWaveGAN
 
-The Fastspeech2 checkpoint is downloaded from https://github.com/espnet/espnet_model_zoo/blob/master/espnet_model_zoo/table.csv
-
-The vocoder is from here: 
+The Fastspeech2 checkpoint is downloaded from https://github.com/espnet/espnet_model_zoo/blob/master/espnet_model_zoo/table.csv 
 
 ## 1. Data preprocess
 After setup ESPnet environment, Please follow [`egs2/vctk/sedit/README.md`](https://github.com/richardbaihe/a3t/blob/dev_richard/egs2/vctk/sedit/README.md).
